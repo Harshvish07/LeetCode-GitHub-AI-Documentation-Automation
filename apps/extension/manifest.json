@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "CodeReviewAI — LeetCode Capture",
+  "version": "0.3.0",
+  "description": "Captures your LeetCode submissions and sends them to CodeReviewAI for analysis.",
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "CodeReviewAI"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://leetcode.com/problems/*"],
+      "js": ["content/leetcode.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": [],
+  "host_permissions": ["http://localhost:4000/*"]
+}

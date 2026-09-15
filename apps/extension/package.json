@@ -1,0 +1,25 @@
+{
+  "name": "@codereviewai/extension",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Chrome Extension (Manifest V3) that captures LeetCode submissions and sends them to the CodeReviewAI API.",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/build.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@codereviewai/shared": "*"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.2.9",
+    "@types/jsdom": "^21.1.7",
+    "esbuild": "^0.28.2",
+    "jsdom": "^29.1.1",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.11"
+  }
+}

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>CodeReviewAI</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <h1>CodeReviewAI</h1>
+      <p id="status" class="status">Open a LeetCode problem page, then click Extract Problem.</p>
+
+      <dl class="fields">
+        <dt>Problem</dt>
+        <dd id="field-title">—</dd>
+
+        <dt>Difficulty</dt>
+        <dd id="field-difficulty">—</dd>
+
+        <dt>Language</dt>
+        <dd id="field-language">—</dd>
+
+        <dt>Submission</dt>
+        <dd id="field-status">—</dd>
+
+        <dt>Runtime</dt>
+        <dd id="field-runtime">—</dd>
+
+        <dt>Memory</dt>
+        <dd id="field-memory">—</dd>
+      </dl>
+
+      <div class="actions">
+        <button id="btn-extract" type="button">Extract Problem</button>
+        <button id="btn-analyze" type="button">Analyze Solution</button>
+      </div>
+
+      <button id="btn-submit" class="submit-button" type="button">Submit Solution</button>
+      <div id="submit-result" class="submit-result" hidden></div>
+
+      <pre id="debug" class="debug" hidden></pre>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

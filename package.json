@@ -1,0 +1,41 @@
+{
+  "name": "codereviewai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CodeReviewAI — AI-Powered LeetCode Solution Analyzer (monorepo root)",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "postinstall": "npm run build:shared",
+    "build:shared": "npm run build -w @codereviewai/shared",
+    "dev:web": "npm run dev -w @codereviewai/web",
+    "dev:api": "npm run dev -w @codereviewai/api",
+    "dev": "concurrently -n web,api -c blue,green \"npm run dev:web\" \"npm run dev:api\"",
+    "build": "npm run build:shared && npm run build -w @codereviewai/api -w @codereviewai/web -w @codereviewai/extension",
+    "test": "npm run build:shared && npm run test --workspaces --if-present",
+    "typecheck": "npm run build:shared && npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.13.4",
+    "concurrently": "^10.0.5",
+    "eslint": "^10.10.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.6",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  }
+}
