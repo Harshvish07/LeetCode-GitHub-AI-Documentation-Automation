@@ -14,6 +14,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@codereviewai/analysis": "*",
     "@codereviewai/shared": "*",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",

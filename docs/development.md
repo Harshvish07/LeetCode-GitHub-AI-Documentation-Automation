@@ -5,9 +5,12 @@
 - **Node.js ≥ 20** (this project was developed and verified against Node 24.11.0). Check with
   `node --version`.
 - **npm ≥ 10** (ships with modern Node installs). Check with `npm --version`.
-- No database, Docker, or other services are required — everything through Phase 3 runs with
-  plain `node`/`npm` (submissions are stored in-memory by the API process; see
+- No database, Docker, or other services are required — everything runs with plain `node`/`npm`
+  (submissions are stored in-memory by the API process; see
   [docs/phases/phase-03.md](phases/phase-03.md#limitations)).
+- An Anthropic API key (`AI_PROVIDER_API_KEY`) is needed **only** to actually call
+  `POST /api/submissions/:id/review` — every other command, endpoint, and test in this guide
+  works with no key configured at all. See [docs/ai-analysis.md](ai-analysis.md).
 
 ## Installation
 
@@ -20,15 +23,16 @@ npm install
 This single command:
 
 1. Installs dependencies for every workspace (`apps/web`, `apps/api`, `apps/extension`,
-   `packages/shared`) into a single root-level `node_modules`, deduplicated by npm workspaces.
-2. Automatically runs `packages/shared`'s build (`tsc`) via a root `postinstall` script, so
-   `packages/shared/dist` exists immediately — this matters because `apps/api` and `apps/web`
-   resolve `@codereviewai/shared` as a normal npm dependency, pointing at its compiled `dist/`
-   output, not its raw TypeScript source.
+   `packages/shared`, `packages/analysis`) into a single root-level `node_modules`,
+   deduplicated by npm workspaces.
+2. Automatically runs `packages/shared`'s and `packages/analysis`'s builds (`tsc`) via a root
+   `postinstall` script (`build:packages`), so their `dist/` output exists immediately — this
+   matters because `apps/api` resolves both `@codereviewai/shared` and `@codereviewai/analysis`
+   as normal npm dependencies, pointing at compiled `dist/` output, not raw TypeScript source.
 
-If you ever delete `packages/shared/dist` manually, running `npm run build:shared` (or any of
-`npm run build` / `npm run test` / `npm run typecheck` from the root, which all rebuild it as a
-first step) restores it.
+If you ever delete `packages/shared/dist` or `packages/analysis/dist` manually, running
+`npm run build:packages` (or any of `npm run build` / `npm run test` / `npm run typecheck` from
+the root, which all rebuild both as a first step) restores them.
 
 ## Commands
 
@@ -36,13 +40,13 @@ All commands below are run from the **repository root** unless noted otherwise.
 
 | Command | What it does |
 | --- | --- |
-| `npm install` | Install all workspace dependencies; builds `packages/shared`. |
+| `npm install` | Install all workspace dependencies; builds `packages/shared` and `packages/analysis`. |
 | `npm run dev` | Runs `apps/web` (Vite, port 5173) and `apps/api` (tsx watch, port 4000) together via `concurrently`. |
 | `npm run dev:web` | Runs only the frontend dev server. |
 | `npm run dev:api` | Runs only the backend dev server (auto-restarts on file changes via `tsx watch`). |
-| `npm run build` | Builds `packages/shared` first, then `apps/api`, `apps/web`, and `apps/extension`, in that order. |
-| `npm run test` | Rebuilds `packages/shared`, then runs every workspace's Vitest suite once. |
-| `npm run typecheck` | Rebuilds `packages/shared`, then runs `tsc --noEmit` in every workspace. |
+| `npm run build` | Builds `packages/shared` and `packages/analysis` first, then `apps/api`, `apps/web`, and `apps/extension`. |
+| `npm run test` | Rebuilds `packages/shared`/`packages/analysis`, then runs every workspace's Vitest suite once. |
+| `npm run typecheck` | Rebuilds `packages/shared`/`packages/analysis`, then runs `tsc --noEmit` in every workspace. |
 | `npm run lint` | Runs ESLint across the entire repo from one root flat config. |
 | `npm run lint:fix` | Same, with `--fix`. |
 | `npm run format` | Runs Prettier `--write` across the repo. |
@@ -60,11 +64,11 @@ Per-workspace equivalents exist too, e.g. `npm run test -w @codereviewai/api` or
    two processes are connected. The backend is at `http://localhost:4000`.
 3. Edit `apps/api/src/**` — `tsx watch` restarts the server automatically.
 4. Edit `apps/web/src/**` — Vite hot-reloads the browser automatically.
-5. Edit `packages/shared/src/**` — run `npm run build:shared` (or restart `npm run dev`) to
-   pick up the change in `apps/api`/`apps/web`, since they consume shared's **compiled**
-   output, not its live source. (`packages/shared`'s own tests via `npm run test:watch -w
-   @codereviewai/shared` run against source directly, so no rebuild is needed just to test
-   `packages/shared` in isolation.)
+5. Edit `packages/shared/src/**` or `packages/analysis/src/**` — run `npm run build:packages`
+   (or restart `npm run dev`) to pick up the change in `apps/api`/`apps/web`, since they
+   consume both packages' **compiled** output, not their live source. (Each package's own
+   tests via `npm run test:watch -w @codereviewai/shared` / `-w @codereviewai/analysis` run
+   against source directly, so no rebuild is needed just to test that package in isolation.)
 6. For the extension: `npm run build -w @codereviewai/extension`, then in Chrome go to
    `chrome://extensions`, enable Developer Mode, click "Load unpacked", and select
    `apps/extension/dist`. Re-run the build after changes and click the refresh icon on the
@@ -85,13 +89,19 @@ npm run test:watch -w @codereviewai/api      # one workspace, watch mode
   (`schemas/submission.schema.test.ts`), service normalization
   (`services/submissions.service.test.ts`), repository round-trips
   (`repositories/submissions.repository.test.ts`), and full HTTP-level integration
-  (`routes/submissions.route.test.ts`).
+  (`routes/submissions.route.test.ts`). `POST /api/submissions/:id/review` (Phase 5) is covered
+  the same way, plus the whole `ai/` module in isolation (prompt building, schema validation,
+  provider request/response mapping, the orchestrating service, and the deterministic-vs-AI
+  agreement comparison) — **every AI-facing test uses a mocked provider
+  (`ai/providers/mockProvider.ts`) or a mocked `fetch`; nothing ever calls a real AI API.**
 - `apps/web` tests use **React Testing Library** with Vitest's `jsdom` environment; `fetch` is
   stubbed per-test with `vi.stubGlobal` so no real network call happens.
 - `apps/extension` tests use `jsdom`'s `JSDOM` class directly for DOM-dependent extraction
   logic, and a stubbed `fetch` (like `apps/web`) for `lib/api.test.ts`, which exercises the
   extension's `POST /api/submissions` client without a real network call.
-- `packages/shared` tests are plain Vitest unit tests of pure functions.
+- `packages/shared` and `packages/analysis` tests are plain Vitest unit tests of pure
+  functions — no network, no DOM (aside from `packages/analysis`'s own text-based heuristics,
+  which never touch a real page).
 
 ## Linting
 
@@ -124,8 +134,11 @@ npm run build
 Produces:
 
 - `packages/shared/dist` — compiled JS + `.d.ts` declarations.
+- `packages/analysis/dist` — compiled JS + `.d.ts` declarations for the deterministic analysis
+  engine (Phase 4).
 - `apps/api/dist` — compiled JS (via `tsc -p tsconfig.build.json`, which excludes `*.test.ts`
-  files so tests never end up in the shipped output).
+  files, as well as `src/ai/providers/mockProvider.ts` — a test/dev-only fake AI provider that
+  must never ship — so none of them end up in the shipped output).
 - `apps/web/dist` — static production build (`tsc --noEmit` for a final type-check, then
   `vite build`).
 - `apps/extension/dist` — bundled `background.js`, `popup/popup.js`, `content/leetcode.js`,
@@ -136,8 +149,13 @@ To run the built API standalone: `npm run start -w @codereviewai/api` (runs
 
 ## Troubleshooting
 
-- **`Cannot find module '@codereviewai/shared'`** — `packages/shared/dist` is missing or
-  stale. Run `npm run build:shared` from the root.
+- **`Cannot find module '@codereviewai/shared'` or `'@codereviewai/analysis'`** —
+  `packages/shared/dist` or `packages/analysis/dist` is missing or stale. Run
+  `npm run build:packages` from the root (builds both).
+- **`POST /api/submissions/:id/review` returns `502 AI_PROVIDER_ERROR`** — most likely
+  `AI_PROVIDER_API_KEY` isn't set in your environment. This is expected in local dev without a
+  key; every other endpoint works normally. See [docs/ai-analysis.md](ai-analysis.md) and
+  [docs/api.md](api.md#post-apisubmissionsidreview).
 - **`tsc` reports `rootDir` errors mentioning files in `packages/shared/src`** — this means a
   workspace's `tsconfig.json` is trying to type-check shared's raw source instead of resolving
   it as a compiled package; don't add a `paths` override pointing at `packages/shared/src` in

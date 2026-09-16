@@ -13,6 +13,10 @@ class RecordingRepository implements SubmissionRepository {
     this.created.push(submission);
     return submission;
   }
+
+  async findById(id: string): Promise<StoredSubmission | null> {
+    return this.created.find((submission) => submission.id === id) ?? null;
+  }
 }
 
 function validInput(): ValidatedSubmissionInput {
@@ -113,5 +117,22 @@ describe('SubmissionService', () => {
     expect(stored.submission.status).toBeNull();
     expect(stored.submission.runtime).toBeNull();
     expect(stored.submission.memory).toBeNull();
+  });
+
+  it('finds a previously created submission by id', async () => {
+    const service = new SubmissionService(new InMemorySubmissionRepository());
+    const created = await service.createSubmission(validInput());
+
+    const found = await service.getSubmissionById(created.id);
+
+    expect(found).toEqual(created);
+  });
+
+  it('returns null for an unknown submission id', async () => {
+    const service = new SubmissionService(new InMemorySubmissionRepository());
+
+    const found = await service.getSubmissionById('does-not-exist');
+
+    expect(found).toBeNull();
   });
 });

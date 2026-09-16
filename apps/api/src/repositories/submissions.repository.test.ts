@@ -45,4 +45,21 @@ describe('InMemorySubmissionRepository', () => {
 
     expect(second.id).toBe('id-2');
   });
+
+  it('finds a previously created submission by id', async () => {
+    const repository = new InMemorySubmissionRepository();
+    await repository.create(stored('id-1'));
+
+    const found = await repository.findById('id-1');
+
+    expect(found).toEqual(stored('id-1'));
+  });
+
+  it('returns null for an unknown id rather than throwing', async () => {
+    const repository = new InMemorySubmissionRepository();
+
+    const found = await repository.findById('does-not-exist');
+
+    expect(found).toBeNull();
+  });
 });

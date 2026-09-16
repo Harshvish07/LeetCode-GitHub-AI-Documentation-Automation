@@ -28,6 +28,10 @@ export class SubmissionService {
 
     return this.repository.create(submission);
   }
+
+  async getSubmissionById(id: string): Promise<StoredSubmission | null> {
+    return this.repository.findById(id);
+  }
 }
 
 /**

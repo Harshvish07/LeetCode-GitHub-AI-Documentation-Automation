@@ -25,3 +25,16 @@ export class ValidationError extends ApiError {
     this.name = 'ValidationError';
   }
 }
+
+/**
+ * Thrown when a resource looked up by id doesn't exist — added in Phase 5,
+ * the first phase with a read path (`GET`-by-id-shaped lookup) at all.
+ * Phase 3's docs predicted this exact addition: "additional error
+ * subclasses (like NotFoundError) will be added when read endpoints exist."
+ */
+export class NotFoundError extends ApiError {
+  constructor(message: string) {
+    super(404, 'NOT_FOUND', message);
+    this.name = 'NotFoundError';
+  }
+}

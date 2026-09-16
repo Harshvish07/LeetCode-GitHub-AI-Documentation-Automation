@@ -1,11 +1,16 @@
 # CodeReviewAI — AI-Powered LeetCode Solution Analyzer
 
-> **Status: Phase 3 of 10 — Submission API.** The extension can extract a LeetCode
-> problem/submission and send it to a real backend endpoint (`POST /api/submissions`), which
-> validates, normalizes, and stores it. No AI analysis or GitHub integration exists yet — see
-> [Phase Status](#21-phase-status) and [docs/phases/phase-03.md](docs/phases/phase-03.md) for
-> exactly what is implemented today (Phase 1: [docs/phases/phase-01.md](docs/phases/phase-01.md),
-> Phase 2: [docs/phases/phase-02.md](docs/phases/phase-02.md)).
+> **Status: Phase 5 of 10 — AI-Powered Solution Review.** `POST /api/submissions/:id/review`
+> combines Phase 4's deterministic analysis with a schema-validated AI review (Anthropic
+> Claude) answering all 16 required review questions — and explicitly exposes any disagreement
+> between the two rather than hiding it. Document generation and GitHub integration remain
+> unimplemented — see [Phase Status](#21-phase-status) and
+> [docs/phases/phase-05.md](docs/phases/phase-05.md) /
+> [docs/ai-analysis.md](docs/ai-analysis.md) for exactly what is implemented today (Phase 1:
+> [docs/phases/phase-01.md](docs/phases/phase-01.md), Phase 2:
+> [docs/phases/phase-02.md](docs/phases/phase-02.md), Phase 3:
+> [docs/phases/phase-03.md](docs/phases/phase-03.md), Phase 4:
+> [docs/phases/phase-04.md](docs/phases/phase-04.md)).
 
 ## 1. What this project does
 
@@ -42,20 +47,24 @@ zero manual write-up effort.
 ## 4. Main features planned (across all 10 phases)
 
 - Chrome extension that captures LeetCode problem + submission data (Phase 2–3)
-- Backend API to receive and store submission payloads (Phase 3–4)
-- AI-powered solution analysis: pattern detection, correctness explanation, complexity
-  analysis, weaknesses, improvement suggestions, optimal-approach comparison (Phase 5–6)
-- Automatic generation of a structured Markdown learning document per submission (Phase 6–7)
-- Automatic commit of that document to a GitHub repository via the GitHub API (Phase 7–8)
-- A web dashboard to browse past submissions and generated documents (Phase 8–9)
-- Authentication, persistence, and polish (Phase 9–10)
+- Backend API to receive and store submission payloads (Phase 3)
+- Deterministic (non-AI) pattern detection, complexity estimation, code-quality and edge-case
+  analysis (Phase 4)
+- AI-powered solution review layered on top of Phase 4's deterministic findings, answering 16
+  required review questions with disagreement between the AI and static analysis explicitly
+  surfaced (Phase 5)
+- Automatic generation of a structured Markdown learning document per submission, plus real
+  (database) persistence (Phase 6)
+- Automatic commit of that document to a GitHub repository via the GitHub API (Phase 7)
+- A web dashboard to browse past submissions and generated documents (Phase 8)
+- Authentication and polish (Phase 9–10)
 
 ## 5. Current implementation status
 
-**Phases 1–3.** What exists right now:
+**Phases 1–5.** What exists right now:
 
-- A working npm-workspaces monorepo with four packages (`apps/web`, `apps/api`,
-  `apps/extension`, `packages/shared`).
+- A working npm-workspaces monorepo with five packages (`apps/web`, `apps/api`,
+  `apps/extension`, `packages/shared`, `packages/analysis`).
 - A React + Vite frontend that renders a status page and calls the backend health endpoint.
 - An Express + TypeScript backend with `GET /api/health` and (Phase 3) `POST /api/submissions`
   — layered routes → validation middleware → controllers → services → repositories, with a
@@ -75,11 +84,28 @@ zero manual write-up effort.
   `LeetCodeExtraction` domain type, and (Phase 3) the `POST /api/submissions` wire contract
   (`CreateSubmissionRequest`/`StoredSubmission`) plus the LeetCode URL-parsing logic, shared
   between the extension and the API so both validate a problem URL the same way.
+- A deterministic analysis engine, `packages/analysis` (Phase 4):
+  `analyzeSolution({ code, language })` recognizes 19 algorithm patterns (Hash Map, Two
+  Pointers, DFS, Dynamic Programming, ...) via a modular, confidence-scored signal engine;
+  estimates time/space complexity from loop nesting, recursion, and the detected patterns; and
+  flags code-quality and edge-case concerns — every output carrying its own confidence level
+  and, for patterns, plain-language evidence. As of Phase 5, a real dependency of `apps/api`.
+  See [docs/phases/phase-04.md](docs/phases/phase-04.md).
+- An AI-powered review layer, `apps/api/src/ai/` (Phase 5): `POST
+  /api/submissions/:id/review` runs Phase 4's deterministic analysis, sends the problem +
+  code + that analysis to an LLM provider (Anthropic Claude, behind a swappable
+  `AiProvider` interface), validates the response against a strict Zod schema, and returns
+  **both** analyses side by side plus an explicit `agreement` comparison — never merging them
+  or hiding a disagreement. Every AI failure mode (timeout, provider error, rate limit,
+  malformed/invalid response) maps to a specific HTTP status. See
+  [docs/ai-analysis.md](docs/ai-analysis.md) and [docs/phases/phase-05.md](docs/phases/phase-05.md).
 - Strict TypeScript, ESLint (flat config), Prettier, and Vitest configured and passing across
-  every package — 91 tests total (32 API, 41 extension, 2 web, 16 shared).
+  every package — 232 tests total (100 API — 56 new this phase, 41 extension, 2 web, 16
+  shared, 73 analysis). No test anywhere ever makes a real AI API call — every AI-facing test
+  uses a mocked provider.
 
 Nothing beyond this exists yet. There is no database (submissions live in memory and are lost
-on API restart), no authentication, no AI integration, and no GitHub integration — see
+on API restart), no authentication, no document generation, and no GitHub integration — see
 [Known Limitations](#27-known-limitations).
 
 ## 6. Architecture overview
@@ -95,16 +121,21 @@ flowchart LR
     API -- imports types --> SHARED[Shared Types<br/>packages/shared]
     WEB -- imports types --> SHARED
     EXT -- imports types --> SHARED
-    API -. future phase .-> AI[AI Analysis Layer]
+    ANALYSIS[Analysis Engine<br/>packages/analysis]
+    API -- "analyzeSolution()" --> ANALYSIS
+    API -- "server-side only" --> AI[Anthropic API<br/>via ai/providers/anthropicProvider.ts]
     API -. future phase .-> GH[GitHub API]
 ```
 
 Implemented today: the web frontend calls the API's health endpoint (proxied through Vite in
 development); the extension's content script reads a LeetCode problem page's DOM and returns
 structured data to the popup on request; the popup can POST that data to
-`POST /api/submissions`, which validates, normalizes, and stores it; and all three apps share
-type definitions from `packages/shared`. The dotted arrows are future-phase connections and
-are described for context in [docs/architecture.md](docs/architecture.md).
+`POST /api/submissions`, which validates, normalizes, and stores it; all three apps share type
+definitions from `packages/shared`; the deterministic analysis engine (`packages/analysis`,
+Phase 4) is now a real dependency of `apps/api`; and `POST /api/submissions/:id/review` (Phase
+5) combines that deterministic analysis with a schema-validated AI review, calling Anthropic's
+API server-side only. The dotted arrow is a future-phase connection, described for context in
+[docs/architecture.md](docs/architecture.md).
 
 ## 7. Technology stack
 
@@ -114,6 +145,8 @@ are described for context in [docs/architecture.md](docs/architecture.md).
 | Backend    | Node.js, Express 5, TypeScript, Zod           | Small, well-understood HTTP framework; Zod gives runtime schema validation that doesn't just trust a client-side TypeScript type. |
 | Extension  | Chrome Extension Manifest V3, TypeScript, esbuild | MV3 is the current Chrome extension standard; esbuild gives fast, dependency-light bundling.   |
 | Shared     | TypeScript project (`packages/shared`)       | Single source of truth for types/contracts shared across web, api, and extension.              |
+| Analysis   | TypeScript project (`packages/analysis`), no runtime dependencies | Deterministic pattern/complexity/quality/edge-case heuristics, kept dependency-free and standalone so it's trivially testable and reusable from any future consumer. |
+| AI         | Anthropic Claude (Messages API), called via a swappable `AiProvider` interface | A structured, schema-validated review layered on Phase 4's deterministic findings; the provider abstraction means a different LLM vendor is a new file, not a rewrite. |
 | Testing    | Vitest, Supertest, React Testing Library      | Fast, Vite-native test runner; Supertest for HTTP assertions; RTL for component behavior.       |
 | Code quality | ESLint (flat config) + typescript-eslint, Prettier | Consistent style and catch common bugs across a multi-package repo from one root config.  |
 | Tooling    | npm workspaces                                | See [Package management decision](#package-management-decision) below.                         |
@@ -140,13 +173,18 @@ pnpm+Lerna, etc.). Reasoning:
 │   ├── web/            React + Vite frontend
 │   ├── api/             Express + TypeScript backend
 │   │       └── src/
-│   │           ├── routes/          POST /api/submissions, GET /api/health
+│   │           ├── routes/          POST /api/submissions(/:id/review), GET /api/health
 │   │           ├── controllers/      Thin HTTP handlers
 │   │           ├── services/          Business logic (normalize, assign id, persist)
 │   │           ├── schemas/            Zod validation (the real runtime contract)
 │   │           ├── repositories/        Storage abstraction (in-memory today)
 │   │           ├── middleware/           validateBody, errorHandler, requestLogger
-│   │           └── types/                 ApiError/ValidationError
+│   │           ├── types/                 ApiError/ValidationError/NotFoundError
+│   │           └── ai/                     AI review layer (Phase 5 — see below)
+│   │               ├── prompts/               System/user prompt construction
+│   │               ├── providers/              AiProvider interface + Anthropic implementation
+│   │               ├── schemas/                  Zod schema for the AI's structured output
+│   │               └── ai-review.service.ts        Orchestrator: prompt → provider → validate
 │   └── extension/        Chrome Extension (Manifest V3)
 │       └── src/
 │           ├── content/leetcode/   LeetCode extraction adapter (parser, selectors,
@@ -156,17 +194,29 @@ pnpm+Lerna, etc.). Reasoning:
 │           └── lib/                 Messaging contract + API client (lib/api.ts)
 │
 ├── packages/
-│   └── shared/          Shared TypeScript types and small utilities
+│   ├── shared/          Shared TypeScript types and small utilities
+│   └── analysis/         Deterministic solution-analysis engine (Phase 4)
+│       └── src/
+│           ├── pattern-detector/    19 algorithm patterns, signal-based rule engine
+│           ├── complexity-analyzer/  Time/space complexity heuristics
+│           ├── code-review/           Style/maintainability observations
+│           ├── edge-case-analyzer/     Input-robustness observations
+│           ├── shared/                  Loop-nesting + recursion detection primitives
+│           ├── fixtures/                 7 required-problem example solutions
+│           └── solution-analyzer.ts       The one public entry point, analyzeSolution()
 │
 ├── docs/
 │   ├── api.md
+│   ├── ai-analysis.md
 │   ├── architecture.md
 │   ├── development.md
 │   ├── project-overview.md
 │   └── phases/
 │       ├── phase-01.md
 │       ├── phase-02.md
-│       └── phase-03.md
+│       ├── phase-03.md
+│       ├── phase-04.md
+│       └── phase-05.md
 │
 ├── .env.example
 ├── .gitignore
@@ -202,10 +252,24 @@ service, respond) → `src/services/submissions.service.ts` (normalizes fields, 
 `crypto.randomUUID()` id, records a server-side timestamp) → `src/repositories/
 submissions.repository.ts` (a `SubmissionRepository` interface + an `InMemorySubmissionRepository`
 implementation, so a real database can implement the same interface later without touching
-anything above it). `src/middleware/errorHandler.ts` maps every thrown/forwarded error —
-validation failures, malformed JSON, anything unexpected — to the same consistent
-`ApiResponse` envelope and an appropriate status code, so no route ever hand-rolls its own
-error response.
+anything above it — Phase 5 added `findById` to this interface, the first read method it's
+needed). `src/middleware/errorHandler.ts` maps every thrown/forwarded error — validation
+failures, malformed JSON, anything unexpected — to the same consistent `ApiResponse` envelope
+and an appropriate status code, so no route ever hand-rolls its own error response.
+
+`POST /api/submissions/:id/review` (Phase 5 — full reference in
+[docs/api.md](docs/api.md#post-apisubmissionsidreview) and
+[docs/ai-analysis.md](docs/ai-analysis.md)) is the newest endpoint: `src/controllers/
+reviews.controller.ts` loads the stored submission, runs `analyzeSolution()` from
+`@codereviewai/analysis` fresh, and calls `src/ai/ai-review.service.ts` — which builds a prompt
+(`src/ai/prompts/reviewPrompt.ts`), calls an injected `AiProvider` (`src/ai/providers/` — the
+real implementation calls Anthropic's Messages API; a `mockProvider.ts` exists for tests only
+and is excluded from the production build), and validates the raw response against
+`src/ai/schemas/solutionReview.schema.ts` before trusting it. `src/ai/agreement.ts` then
+compares the deterministic and AI complexity/pattern claims and reports exactly where they
+agree or don't (`ai/types.ts`'s `CombinedSolutionReview` keeps both analyses and the
+comparison side by side — never merged). Every AI-specific failure is one `AiReviewError`
+(`src/ai/errors.ts`), translated to an HTTP status in the controller.
 
 ### `apps/extension` — Chrome Extension (Manifest V3)
 
@@ -257,13 +321,31 @@ as-is. `src/utils/leetcodeUrl.ts` (moved here from the extension in Phase 3) hol
 `isLeetCodeProblemUrl`/`extractSlugFromUrl`, so the extension and the API validate a LeetCode
 URL with the exact same logic instead of two copies that could drift apart.
 
+### `packages/analysis` — Deterministic solution-analysis engine
+
+A standalone, dependency-free package: `analyzeSolution({ code, language })` →
+`SolutionAnalysis`. `src/pattern-detector/` recognizes 19 algorithm patterns via a modular,
+signal-based rule engine (each rule is a list of weighted regex/predicate signals; a pattern is
+reported only once matched evidence clears a threshold, with a confidence score that scales
+with — but isn't a raw fraction of — every possible signal, since most signals within a rule are
+mutually-exclusive language alternatives, not independent corroborating evidence).
+`src/complexity-analyzer/` estimates time/space complexity from loop-nesting depth, recursion,
+and the already-detected patterns, always stating its reasoning and never claiming
+mathematical certainty. `src/code-review/` and `src/edge-case-analyzer/` flag
+style/maintainability and input-robustness concerns respectively. `src/shared/codeStructure.ts`
+holds the loop-nesting and recursion-detection primitives every other module depends on.
+`src/fixtures/` holds real example solutions for the 7 required problems, used throughout the
+test suite. As of Phase 5, `analyzeSolution()` is called by `apps/api/src/controllers/
+reviews.controller.ts` on every `POST /api/submissions/:id/review` request, recomputed fresh
+each time rather than cached. Full detail: [docs/phases/phase-04.md](docs/phases/phase-04.md).
+
 ### `docs/`
 
 Project-level documentation, described in [Documentation](#documentation-map) below.
 
 ### Root config files
 
-- **`package.json`** — declares the four workspaces and root-level dev tooling
+- **`package.json`** — declares the five workspaces and root-level dev tooling
   (TypeScript, ESLint, Prettier) shared by all of them, plus scripts that run a command across
   every workspace.
 - **`tsconfig.json`** — the strict, shared base `compilerOptions` every workspace's own
@@ -293,6 +375,15 @@ Project-level documentation, described in [Documentation](#documentation-map) be
 - **All three ↔ Shared types:** `apps/web`, `apps/api`, and `apps/extension` all depend on
   `@codereviewai/shared` for TypeScript types, so a change to a shared contract (like
   `ApiResponse<T>`) is caught by the type checker in every consumer at once.
+- **`packages/analysis` ↔ `apps/api` (implemented, Phase 5):** `analyzeSolution()` is now a
+  real dependency of `apps/api`, called fresh on every `POST /api/submissions/:id/review`
+  request.
+- **`apps/api` ↔ Anthropic API (implemented, Phase 5, server-side only):** the AI review layer
+  calls Anthropic's Messages API directly over `fetch`, behind the swappable `AiProvider`
+  interface. `AI_PROVIDER_API_KEY` is read once, server-side, when constructing the real
+  provider — it's never included in any HTTP response, and neither `apps/web` nor
+  `apps/extension` has any code path that could read it. See
+  [docs/ai-analysis.md](docs/ai-analysis.md#privacy).
 
 ## 14–17. Development setup, installation, environment variables, running
 
@@ -318,14 +409,16 @@ Copy `.env.example` and fill in real values as needed:
 cp .env.example apps/api/.env
 ```
 
-| Variable      | Used by   | Default                 | Purpose                                   |
-| ------------- | --------- | ------------------------ | ------------------------------------------ |
-| `PORT`        | apps/api  | `4000`                    | Port the Express server listens on.        |
-| `NODE_ENV`    | apps/api  | `development`             | Standard Node environment flag.             |
-| `CORS_ORIGIN` | apps/api  | `http://localhost:5173`   | Origin allowed to call the API.             |
+| Variable             | Used by  | Default                 | Purpose                                                        |
+| -------------------- | -------- | ------------------------ | ---------------------------------------------------------------- |
+| `PORT`               | apps/api | `4000`                    | Port the Express server listens on.                              |
+| `NODE_ENV`           | apps/api | `development`             | Standard Node environment flag.                                   |
+| `CORS_ORIGIN`        | apps/api | `http://localhost:5173`   | Origin allowed to call the API.                                    |
+| `AI_PROVIDER_API_KEY` | apps/api | *(none)*                  | Anthropic API key. Only `POST /api/submissions/:id/review` needs it — every other endpoint works fully without it. |
+| `AI_PROVIDER_MODEL`   | apps/api | `claude-sonnet-5`          | Which Claude model the review endpoint calls.                     |
 
-Variables for the AI provider and GitHub integration are documented in `.env.example` but are
-**not read by any code yet** — they belong to later phases.
+`GITHUB_TOKEN`/`GITHUB_REPO` are documented in `.env.example` but **not read by any code yet**
+— they belong to Phase 7.
 
 ### Running the project
 
@@ -347,6 +440,12 @@ open any `https://leetcode.com/problems/<slug>/` page, then click the extension 
 **Submit Solution** sends the extraction to the API and shows the stored result — see
 [docs/api.md](docs/api.md) for the endpoint it calls.
 
+To try the AI review (Phase 5 — no extension/web UI triggers this yet, so use `curl` or
+similar): set `AI_PROVIDER_API_KEY` in `apps/api/.env`, create a submission as above to get an
+`id`, then `curl -X POST http://localhost:4000/api/submissions/<id>/review`. Without a key
+configured, this endpoint still responds — with a clear `502 AI_PROVIDER_ERROR` — rather than
+crashing the server; every other endpoint is completely unaffected either way.
+
 ## 18. Testing
 
 ```bash
@@ -355,15 +454,22 @@ npm run test -w @codereviewai/api        # a single workspace
 npm run test:watch -w @codereviewai/web  # watch mode (per-workspace script)
 ```
 
-Each workspace uses Vitest — 91 tests total. `apps/api` additionally uses Supertest to exercise
-the Express app over HTTP without binding a real port, covering `POST /api/submissions` at
-every layer (schema rules, service normalization, repository round-trips, and full HTTP-level
-integration — valid submission, invalid submission, missing code, invalid language, invalid
-URL, malformed/non-JSON payload); `apps/web` uses React Testing Library with a `jsdom`
-environment; `apps/extension`'s LeetCode adapter tests construct synthetic pages with `jsdom`'s
-`JSDOM` class directly (URL detection, slug/title/difficulty/code extraction, and — importantly
-— that missing fields come back `null` instead of guessed values), and `lib/api.test.ts`
-exercises the extension's API client against a stubbed `fetch`.
+Each workspace uses Vitest — 232 tests total. `apps/api` additionally uses Supertest to
+exercise the Express app over HTTP without binding a real port, covering `POST /api/submissions`
+at every layer (schema rules, service normalization, repository round-trips, and full
+HTTP-level integration — valid submission, invalid submission, missing code, invalid language,
+invalid URL, malformed/non-JSON payload) and, since Phase 5, `POST /api/submissions/:id/review`
+the same way (a full create-then-review round trip, an end-to-end disagreement scenario using
+real nested-loop code against a mocked AI claiming the wrong complexity, a 404 for an unknown
+id, and one test per AI failure mode mapped to its HTTP status); `apps/web` uses React Testing
+Library with a `jsdom` environment; `apps/extension`'s LeetCode adapter tests construct
+synthetic pages with `jsdom`'s `JSDOM` class directly (URL detection,
+slug/title/difficulty/code extraction, and — importantly — that missing fields come back
+`null` instead of guessed values), and `lib/api.test.ts` exercises the extension's API client
+against a stubbed `fetch`; `packages/analysis` (73 tests) covers every pattern-detection rule,
+every complexity/code-quality/edge-case heuristic, and all 7 required-problem fixtures run
+end-to-end through `analyzeSolution()`. **No test anywhere makes a real AI API call** — every
+AI-facing test in `apps/api/src/ai/` uses `providers/mockProvider.ts` or a mocked `fetch`.
 
 ## 19. Code quality commands
 
@@ -381,14 +487,19 @@ npm run format:check     # Prettier --check (used in CI-style verification)
 | ----- | ---------------------------------------------------------------------- |
 | 1     | Project foundation — monorepo, skeleton apps, tooling (complete)       |
 | 2     | Chrome extension: read problem + submission data from the LeetCode DOM (complete) |
-| 3     | API: endpoints to receive and store captured submissions (this phase)  |
-| 4     | Persistence layer (database) for submissions                           |
-| 5     | AI integration: pattern detection, complexity analysis, explanations   |
-| 6     | Learning document generation from AI analysis                          |
+| 3     | API: endpoints to receive and store captured submissions (complete)    |
+| 4     | Deterministic (non-AI) solution-analysis engine: pattern detection, complexity heuristics, code quality, edge cases (complete) |
+| 5     | AI-powered solution review, layered on top of Phase 4's deterministic analysis (this phase) |
+| 6     | Learning document generation from the combined review + real (database) persistence |
 | 7     | GitHub integration: commit generated documents automatically           |
 | 8     | Web dashboard: browse past submissions and documents                   |
 | 9     | Authentication and per-user data                                       |
 | 10    | Polish, deployment, end-to-end hardening                               |
+
+*(Note: an earlier draft of this table listed "persistence layer" as Phase 4 — Phase 4 was
+actually the analysis engine documented below; persistence is now folded into Phase 6, since
+that's the phase that first needs to durably store more than a submission — its AI analysis and
+generated document too.)*
 
 ## 21. Phase status
 
@@ -397,22 +508,34 @@ npm run format:check     # Prettier --check (used in CI-style verification)
 - **Phase 2 — LeetCode Extraction: complete.** See
   [docs/phases/phase-02.md](docs/phases/phase-02.md).
 - **Phase 3 — Submission API: complete.** See
-  [docs/phases/phase-03.md](docs/phases/phase-03.md) for the full record of what was built,
-  verified, and why.
+  [docs/phases/phase-03.md](docs/phases/phase-03.md).
+- **Phase 4 — Deterministic Solution Analysis: complete.** See
+  [docs/phases/phase-04.md](docs/phases/phase-04.md).
+- **Phase 5 — AI-Powered Solution Review: complete.** See
+  [docs/phases/phase-05.md](docs/phases/phase-05.md) and
+  [docs/ai-analysis.md](docs/ai-analysis.md) for the full record of what was built, verified,
+  and why.
 
-Phases 4–10 have not been started.
+Phases 6–10 have not been started.
 
 ## 22. Future architecture
 
 Later phases add, without changing what exists today:
 
+- **Learning-document generation** — rendering a `CombinedSolutionReview` (Phase 5's output)
+  into a structured Markdown document (Phase 6).
 - **Persistence** in `apps/api` (database TBD — likely PostgreSQL or SQLite for a portfolio
   deployment) implementing the existing `SubmissionRepository` interface, replacing
-  `InMemorySubmissionRepository` with no change to the service/controller/route above it.
+  `InMemorySubmissionRepository` with no change to the service/controller/route above it (Phase
+  6, alongside learning-document generation) — this is also the point where a *generated
+  review* itself becomes worth persisting, not just the raw submission.
 - Read endpoints (`GET /api/submissions`, `GET /api/submissions/:id`) once there's a
-  persistence layer worth reading from.
-- An **AI analysis module** in `apps/api` that calls an LLM provider to produce the pattern
-  identification, complexity analysis, and improvement suggestions.
+  persistence layer worth reading from — `findById` already exists on the repository interface
+  (added in Phase 5 for the review endpoint's internal use), so this is mostly a routing
+  addition.
+- Retry logic and response caching for AI review requests, and extension/web UI that actually
+  triggers `POST /api/submissions/:id/review` (see
+  [docs/ai-analysis.md#limitations](docs/ai-analysis.md#limitations)).
 - A **GitHub integration module** that authenticates (OAuth or a personal access token) and
   commits generated Markdown documents to a user-configured repository.
 - A **dashboard** in `apps/web` for browsing historical submissions and documents.
@@ -439,10 +562,24 @@ Full detail and diagrams: [docs/architecture.md](docs/architecture.md).
   own `metadata.receivedAt` rather than only trusting the client's `metadata.extractedAt`. See
   [docs/phases/phase-03.md](docs/phases/phase-03.md#validation).
 - Submitted code is stored as opaque string data — nothing in `apps/api` parses or executes any
-  part of a submitted payload.
-- Future phases that introduce a GitHub token and an AI provider API key must keep those
-  secrets server-side (`apps/api`) — never in the frontend or extension bundle, since both
-  ship code to the client/browser.
+  part of a submitted payload. The Phase 4 analysis engine holds the same line: every check is
+  a regex/text heuristic over the source string — no `eval`, no sandboxed execution, nothing
+  that runs submitted code. The Phase 5 AI review layer sends the code as prompt text and gets
+  text back; it never executes it either.
+- **The AI provider API key never reaches the browser, the extension, or the frontend.**
+  `AI_PROVIDER_API_KEY` is read exactly once, server-side, in `apps/api/src/routes/index.ts`
+  when constructing the real Anthropic provider — never included in any HTTP response, and
+  nothing in `apps/web`/`apps/extension` has any code path that could read it.
+- **The AI request sends only what's needed to review the code** — the problem, the submitted
+  code/language, and Phase 4's deterministic analysis. A submission's `id` and
+  `metadata.receivedAt`/`extractedAt`/`source` are never forwarded, since none of them would
+  improve the review. See [docs/ai-analysis.md#privacy](docs/ai-analysis.md#privacy).
+- **AI output is never trusted blindly.** A raw AI response must pass a strict Zod schema
+  before it's used anywhere, and its complexity/pattern claims are explicitly compared
+  against — never silently substituted for — Phase 4's independently-computed analysis. See
+  [docs/ai-analysis.md](docs/ai-analysis.md#hallucination-mitigation).
+- A future GitHub token (Phase 7) must keep the same server-side-only discipline — never in
+  the frontend or extension bundle, since both ship code to the client/browser.
 
 ## 24. GitHub integration plan
 
@@ -452,14 +589,23 @@ personal access token or GitHub App, configured via `GITHUB_TOKEN`/`GITHUB_REPO`
 submission in a user-specified repository, effectively building an auto-maintained log of
 solved problems.
 
-## 25. AI integration plan
+## 25. AI integration
 
-Not implemented yet. Planned approach (Phase 5–6): the backend sends the captured problem
-description and submitted code to an LLM provider (configured via `AI_PROVIDER_API_KEY` —
-see `.env.example`) with a structured prompt requesting pattern identification, a correctness
-explanation, time/space complexity analysis, weaknesses, improvement suggestions, and a
-comparison against an optimal approach. The response is parsed into a structured result used
-to generate the learning document in Phase 6.
+**Implemented as of Phase 5.** `POST /api/submissions/:id/review` runs Phase 4's deterministic
+`analyzeSolution()` first, then sends the problem, the submitted code, and that deterministic
+analysis to Anthropic Claude (configured via `AI_PROVIDER_API_KEY`/`AI_PROVIDER_MODEL`) with a
+structured prompt answering all 16 required review questions (approach, pattern, why it works,
+complexity, strengths, improvements, correctness concerns, missed edge cases, optimality, a
+better approach if one exists and why, learning points, and related patterns to practice). The
+raw response is validated against a strict Zod schema before it's trusted, and its
+complexity/pattern claims are explicitly compared against Phase 4's — not blindly trusted, and
+never silently merged; any disagreement is surfaced in the response's `agreement` field. Every
+AI failure mode (timeout, provider error, rate limit, malformed/invalid response) maps to a
+specific HTTP status rather than crashing the process. See
+[docs/ai-analysis.md](docs/ai-analysis.md) for the full architecture, and
+[docs/phases/phase-05.md](docs/phases/phase-05.md) for a worked example, including a
+disagreement example. **Not yet built:** rendering this into the learning document (Phase 6) or
+committing it to GitHub (Phase 7).
 
 ## 26. Contribution / development guidelines
 
@@ -488,8 +634,24 @@ to generate the learning document in Phase 6.
   (`InMemorySubmissionRepository`) — everything is lost when the API process restarts. This
   was explicit Phase 3 scope ("do NOT introduce PostgreSQL yet unless genuinely required");
   real persistence is Phase 4.
-- No read endpoints — a submission can be created but not listed or fetched back yet.
-- No AI analysis, no learning-document generation, and no GitHub integration exist yet.
+- No read endpoints exposing submissions directly — a submission can be created and reviewed
+  (`POST /api/submissions/:id/review` looks it up internally via the repository's `findById`),
+  but there's no `GET /api/submissions/:id` to fetch one back directly yet.
+- **Phase 4's analysis engine has its own heuristic limitations** (no AST/execution, functional
+  iteration not counted as looping, regexes that assume one balanced paren pair) — see
+  [docs/phases/phase-04.md](docs/phases/phase-04.md#limitations). These carry through to the
+  AI review, which is grounded in that same deterministic analysis.
+- **The real Anthropic provider was never exercised against the live API in this
+  environment** — no real, billed API call was made during this phase's development or
+  verification; every test uses a mocked provider. See
+  [docs/ai-analysis.md#limitations](docs/ai-analysis.md#limitations).
+- **No retry logic or response caching for AI reviews** — a transient failure surfaces
+  immediately as an error rather than being retried, and requesting a review twice for the same
+  submission calls the AI provider twice, at full cost.
+- **No extension or web UI triggers a review yet** — the endpoint exists, is fully tested, and
+  works when called directly (e.g. via `curl`), but nothing in `apps/extension`/`apps/web`
+  calls it.
+- No learning-document generation and no GitHub integration exist yet.
 - No authentication or multi-user support — every request is trusted as the extension's own
   user; there's no concept of a logged-in user yet.
 - The web app's only real feature is a health-check status display; there is no dashboard yet.
@@ -516,6 +678,20 @@ to generate the learning document in Phase 6.
   against a live LeetCode page — see Known Limitations above.
 - Replace the dev-only `console.log` request logger with a structured logger (pino/winston)
   before this ever runs somewhere log volume or format matters.
+- Extend `packages/analysis`'s loop-nesting detection to count functional iteration
+  (`.forEach`/`.map`/`.filter`/`.reduce`) as looping, not just `for`/`while` — see
+  [docs/phases/phase-04.md](docs/phases/phase-04.md#limitations).
+- Stress-test the remaining `[^)]*`-shaped regex signals in `pattern-detector/rules/` (Stack,
+  BFS/DFS) against nested function calls the way the Sliding Window signal's bug was caught and
+  fixed in Phase 4.
+- Verify `ai/providers/anthropicProvider.ts` against a real Anthropic API call with a real key
+  — every test mocks the provider, so its request-building/response-parsing logic has never
+  been confirmed against Anthropic's actual live response format.
+- Add retry-with-backoff for transient AI provider failures, and response caching to avoid
+  paying for a repeated review of the same submission.
+- Improve `ai/agreement.ts`'s complexity comparison from a normalized string match toward a
+  light symbolic equivalence check (e.g. so `"O(n + m)"` and `"O(m + n)"` aren't flagged as
+  disagreeing) — see [docs/ai-analysis.md#limitations](docs/ai-analysis.md#limitations).
 
 ---
 
@@ -527,6 +703,9 @@ to generate the learning document in Phase 6.
   boundaries, with diagrams.
 - [docs/api.md](docs/api.md) — every API endpoint: method, URL, purpose, request/response
   shapes, error codes, examples.
+- [docs/ai-analysis.md](docs/ai-analysis.md) — the AI review layer's architecture, prompt
+  design, structured-output validation, deterministic-vs-AI comparison, hallucination
+  mitigation, limitations, privacy, and cost considerations.
 - [docs/development.md](docs/development.md) — prerequisites, setup, commands, and
   troubleshooting.
 - [docs/phases/phase-01.md](docs/phases/phase-01.md) — the detailed record of Phase 1.
@@ -534,3 +713,7 @@ to generate the learning document in Phase 6.
   (LeetCode extraction).
 - [docs/phases/phase-03.md](docs/phases/phase-03.md) — the detailed record of Phase 3
   (submission API).
+- [docs/phases/phase-04.md](docs/phases/phase-04.md) — the detailed record of Phase 4
+  (deterministic solution-analysis engine).
+- [docs/phases/phase-05.md](docs/phases/phase-05.md) — the detailed record of Phase 5
+  (AI-powered solution review), including a full example input/output.
