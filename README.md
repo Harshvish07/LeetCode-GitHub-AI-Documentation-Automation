@@ -1,16 +1,21 @@
 # CodeReviewAI — AI-Powered LeetCode Solution Analyzer
 
-> **Status: Phase 5 of 10 — AI-Powered Solution Review.** `POST /api/submissions/:id/review`
-> combines Phase 4's deterministic analysis with a schema-validated AI review (Anthropic
-> Claude) answering all 16 required review questions — and explicitly exposes any disagreement
-> between the two rather than hiding it. Document generation and GitHub integration remain
-> unimplemented — see [Phase Status](#21-phase-status) and
-> [docs/phases/phase-05.md](docs/phases/phase-05.md) /
-> [docs/ai-analysis.md](docs/ai-analysis.md) for exactly what is implemented today (Phase 1:
-> [docs/phases/phase-01.md](docs/phases/phase-01.md), Phase 2:
+> **Status: Phase 7 of 10 — GitHub Integration.** `POST /api/submissions/:id/publish` takes
+> Phase 6's generated Markdown learning document and commits it to a configured GitHub
+> repository — a per-problem `problems/NNN-slug/README.md`, a structured `problems/index.json`,
+> and an auto-maintained root `README.md` table — with explicit duplicate detection so a
+> re-analyzed problem is never silently overwritten. Token-based auth only for now (no OAuth
+> yet) — see [Phase Status](#21-phase-status) and
+> [docs/phases/phase-07.md](docs/phases/phase-07.md) /
+> [docs/github-integration.md](docs/github-integration.md) for exactly what is implemented
+> today (Phase 1: [docs/phases/phase-01.md](docs/phases/phase-01.md), Phase 2:
 > [docs/phases/phase-02.md](docs/phases/phase-02.md), Phase 3:
 > [docs/phases/phase-03.md](docs/phases/phase-03.md), Phase 4:
-> [docs/phases/phase-04.md](docs/phases/phase-04.md)).
+> [docs/phases/phase-04.md](docs/phases/phase-04.md), Phase 5:
+> [docs/phases/phase-05.md](docs/phases/phase-05.md) /
+> [docs/ai-analysis.md](docs/ai-analysis.md), Phase 6:
+> [docs/phases/phase-06.md](docs/phases/phase-06.md) /
+> [docs/document-generation.md](docs/document-generation.md)).
 
 ## 1. What this project does
 
@@ -53,15 +58,18 @@ zero manual write-up effort.
 - AI-powered solution review layered on top of Phase 4's deterministic findings, answering 16
   required review questions with disagreement between the AI and static analysis explicitly
   surfaced (Phase 5)
-- Automatic generation of a structured Markdown learning document per submission, plus real
-  (database) persistence (Phase 6)
-- Automatic commit of that document to a GitHub repository via the GitHub API (Phase 7)
-- A web dashboard to browse past submissions and generated documents (Phase 8)
+- Automatic generation of a structured, professional Markdown learning document per submission
+  (Phase 6)
+- Automatic commit of that document to a GitHub repository via the GitHub API, with duplicate
+  detection and structured commits (Phase 7)
+- A web dashboard to browse past submissions and generated documents, plus real (database)
+  persistence to support it (Phase 8+ — no database exists yet; see
+  [Known Limitations](#27-known-limitations))
 - Authentication and polish (Phase 9–10)
 
 ## 5. Current implementation status
 
-**Phases 1–5.** What exists right now:
+**Phases 1–7.** What exists right now:
 
 - A working npm-workspaces monorepo with five packages (`apps/web`, `apps/api`,
   `apps/extension`, `packages/shared`, `packages/analysis`).
@@ -93,19 +101,44 @@ zero manual write-up effort.
   See [docs/phases/phase-04.md](docs/phases/phase-04.md).
 - An AI-powered review layer, `apps/api/src/ai/` (Phase 5): `POST
   /api/submissions/:id/review` runs Phase 4's deterministic analysis, sends the problem +
-  code + that analysis to an LLM provider (Anthropic Claude, behind a swappable
-  `AiProvider` interface), validates the response against a strict Zod schema, and returns
+  code + that analysis to an LLM provider (Anthropic Claude or Google Gemini, selected by
+  `AI_PROVIDER` behind a swappable `AiProvider` interface), validates the response against a
+  strict Zod schema, and returns
   **both** analyses side by side plus an explicit `agreement` comparison — never merging them
   or hiding a disagreement. Every AI failure mode (timeout, provider error, rate limit,
   malformed/invalid response) maps to a specific HTTP status. See
   [docs/ai-analysis.md](docs/ai-analysis.md) and [docs/phases/phase-05.md](docs/phases/phase-05.md).
+- A document generation layer, `apps/api/src/document/` (Phase 6): `POST
+  /api/submissions/:id/document` turns the same problem/code/deterministic-analysis/AI-review
+  data into a complete, 18-section Markdown learning document — the exact submitted code,
+  unmodified and labeled **YOUR SOLUTION**; both analyses' patterns/complexity shown side by
+  side with an explicit agreement note; a clearly-labeled **RECOMMENDED SOLUTION** (with
+  pseudocode and working code) when a better approach exists, or an explicit "already optimal"
+  statement when it doesn't. A dedicated `markdown/` primitives module escapes every piece of
+  dynamic text so AI-generated or extracted prose can never inject rogue document structure,
+  while leaving actual code completely untouched. See
+  [docs/document-generation.md](docs/document-generation.md) and
+  [docs/phases/phase-06.md](docs/phases/phase-06.md).
+- A GitHub publishing layer, `apps/api/src/github/` (Phase 7): `POST
+  /api/submissions/:id/publish` commits that same document to a configured GitHub repository —
+  `problems/NNN-slug/README.md`, a structured `problems/index.json`, and an auto-maintained root
+  `README.md` table (inserted between clear HTML-comment markers so hand-written content is
+  never touched). Wraps `@octokit/rest` behind a swappable `GitHubClient` interface (mirroring
+  the AI provider abstraction); a request explicitly states `mode: "create"` or `"update"`, and
+  publishing a problem that already exists in `"create"` mode is **rejected**, never silently
+  overwritten. Every write gets a specific, meaningful commit message (e.g. `"docs: add
+  analysis for Two Sum"`) — never a generic one. Token-based auth only for now
+  (`GITHUB_TOKEN`), behind an abstraction ready for OAuth later. See
+  [docs/github-integration.md](docs/github-integration.md) and
+  [docs/phases/phase-07.md](docs/phases/phase-07.md).
 - Strict TypeScript, ESLint (flat config), Prettier, and Vitest configured and passing across
-  every package — 232 tests total (100 API — 56 new this phase, 41 extension, 2 web, 16
-  shared, 73 analysis). No test anywhere ever makes a real AI API call — every AI-facing test
-  uses a mocked provider.
+  every package — 401 tests total (269 API — 83 new this phase, 41 extension, 2 web, 16
+  shared, 73 analysis). No test anywhere ever makes a real AI or GitHub API call — every such
+  test uses a mocked provider/client.
 
 Nothing beyond this exists yet. There is no database (submissions live in memory and are lost
-on API restart), no authentication, no document generation, and no GitHub integration — see
+on API restart), no authentication, no OAuth (GitHub publishing uses a single token only), and
+no web/extension UI triggers any of the review/document/publish endpoints yet — see
 [Known Limitations](#27-known-limitations).
 
 ## 6. Architecture overview
@@ -123,8 +156,9 @@ flowchart LR
     EXT -- imports types --> SHARED
     ANALYSIS[Analysis Engine<br/>packages/analysis]
     API -- "analyzeSolution()" --> ANALYSIS
-    API -- "server-side only" --> AI[Anthropic API<br/>via ai/providers/anthropicProvider.ts]
-    API -. future phase .-> GH[GitHub API]
+    API -- "server-side only" --> AI[Anthropic or Gemini API<br/>via ai/providers/createProviderFromEnv.ts]
+    API -- "server-side only" --> GH[GitHub API<br/>via github/github-client.ts]
+    API -. future phase (OAuth) .-> OAUTH[GitHub OAuth]
 ```
 
 Implemented today: the web frontend calls the API's health endpoint (proxied through Vite in
@@ -132,10 +166,16 @@ development); the extension's content script reads a LeetCode problem page's DOM
 structured data to the popup on request; the popup can POST that data to
 `POST /api/submissions`, which validates, normalizes, and stores it; all three apps share type
 definitions from `packages/shared`; the deterministic analysis engine (`packages/analysis`,
-Phase 4) is now a real dependency of `apps/api`; and `POST /api/submissions/:id/review` (Phase
-5) combines that deterministic analysis with a schema-validated AI review, calling Anthropic's
-API server-side only. The dotted arrow is a future-phase connection, described for context in
-[docs/architecture.md](docs/architecture.md).
+Phase 4) is now a real dependency of `apps/api`; `POST /api/submissions/:id/review` (Phase 5)
+combines that deterministic analysis with a schema-validated AI review, calling the configured
+provider's API (Anthropic or Gemini, per `AI_PROVIDER`) server-side only;
+`POST /api/submissions/:id/document` (Phase 6) turns that same combined review into a Markdown
+document, reusing the identical `ANALYSIS`/`AI` connections shown above (see
+`services/combined-review.service.ts`) rather than adding a new external dependency; and
+`POST /api/submissions/:id/publish` (Phase 7) commits that document to the configured GitHub
+repository, server-side only, via a token read from `GITHUB_TOKEN`. The dotted arrow is a
+future-phase connection (OAuth-based GitHub auth, replacing the single token), described for
+context in [docs/architecture.md](docs/architecture.md).
 
 ## 7. Technology stack
 
@@ -146,7 +186,8 @@ API server-side only. The dotted arrow is a future-phase connection, described f
 | Extension  | Chrome Extension Manifest V3, TypeScript, esbuild | MV3 is the current Chrome extension standard; esbuild gives fast, dependency-light bundling.   |
 | Shared     | TypeScript project (`packages/shared`)       | Single source of truth for types/contracts shared across web, api, and extension.              |
 | Analysis   | TypeScript project (`packages/analysis`), no runtime dependencies | Deterministic pattern/complexity/quality/edge-case heuristics, kept dependency-free and standalone so it's trivially testable and reusable from any future consumer. |
-| AI         | Anthropic Claude (Messages API), called via a swappable `AiProvider` interface | A structured, schema-validated review layered on Phase 4's deterministic findings; the provider abstraction means a different LLM vendor is a new file, not a rewrite. |
+| AI         | Anthropic Claude (Messages API) or Google Gemini (`generateContent` API), selected by `AI_PROVIDER` via a swappable `AiProvider` interface | A structured, schema-validated review layered on Phase 4's deterministic findings; the provider abstraction means a different LLM vendor is a new file, not a rewrite. |
+| GitHub     | `@octokit/rest` behind a swappable `GitHubClient` interface | Official GitHub REST API client; the abstraction (mirroring `AiProvider`) means auth can move from a single token to OAuth later without touching request logic. |
 | Testing    | Vitest, Supertest, React Testing Library      | Fast, Vite-native test runner; Supertest for HTTP assertions; RTL for component behavior.       |
 | Code quality | ESLint (flat config) + typescript-eslint, Prettier | Consistent style and catch common bugs across a multi-package repo from one root config.  |
 | Tooling    | npm workspaces                                | See [Package management decision](#package-management-decision) below.                         |
@@ -173,18 +214,30 @@ pnpm+Lerna, etc.). Reasoning:
 │   ├── web/            React + Vite frontend
 │   ├── api/             Express + TypeScript backend
 │   │       └── src/
-│   │           ├── routes/          POST /api/submissions(/:id/review), GET /api/health
-│   │           ├── controllers/      Thin HTTP handlers
-│   │           ├── services/          Business logic (normalize, assign id, persist)
+│   │           ├── routes/          POST /api/submissions(/:id/review, /:id/document, /:id/publish), GET /api/health
+│   │           ├── controllers/      Thin HTTP handlers + shared error mapping (aiErrorMapping.ts, githubErrorMapping.ts)
+│   │           ├── services/          Business logic (normalize, assign id, persist,
+│   │           │                      buildCombinedReview() + GitHubPublishService shared by all three endpoints)
 │   │           ├── schemas/            Zod validation (the real runtime contract)
 │   │           ├── repositories/        Storage abstraction (in-memory today)
 │   │           ├── middleware/           validateBody, errorHandler, requestLogger
 │   │           ├── types/                 ApiError/ValidationError/NotFoundError
-│   │           └── ai/                     AI review layer (Phase 5 — see below)
-│   │               ├── prompts/               System/user prompt construction
-│   │               ├── providers/              AiProvider interface + Anthropic implementation
-│   │               ├── schemas/                  Zod schema for the AI's structured output
-│   │               └── ai-review.service.ts        Orchestrator: prompt → provider → validate
+│   │           ├── ai/                     AI review layer (Phase 5 — see below)
+│   │           │   ├── prompts/               System/user prompt construction
+│   │           │   ├── providers/              AiProvider interface + Anthropic/Gemini implementations
+│   │           │   ├── schemas/                  Zod schema for the AI's structured output
+│   │           │   └── ai-review.service.ts        Orchestrator: prompt → provider → validate
+│   │           ├── document/                Document generation layer (Phase 6 — see below)
+│   │           │   ├── markdown/               Markdown primitives (escapeMarkdown, codeBlock, table, ...)
+│   │           │   ├── templates/               One file per document section group
+│   │           │   ├── formatter/                Safe filename generation
+│   │           │   └── document-generator.ts       The one exported entry point
+│   │           └── github/                  GitHub publishing layer (Phase 7 — see below)
+│   │               ├── github-client.ts        GitHubClient interface + the one Octokit implementation
+│   │               ├── repository.service.ts    Repository lookup
+│   │               ├── file.service.ts           Duplicate detection + create/update
+│   │               ├── commit.service.ts          Meaningful commit-message construction
+│   │               └── readmeTable.ts              Auto-maintained root README table
 │   └── extension/        Chrome Extension (Manifest V3)
 │       └── src/
 │           ├── content/leetcode/   LeetCode extraction adapter (parser, selectors,
@@ -208,6 +261,8 @@ pnpm+Lerna, etc.). Reasoning:
 ├── docs/
 │   ├── api.md
 │   ├── ai-analysis.md
+│   ├── document-generation.md
+│   ├── github-integration.md
 │   ├── architecture.md
 │   ├── development.md
 │   ├── project-overview.md
@@ -216,7 +271,9 @@ pnpm+Lerna, etc.). Reasoning:
 │       ├── phase-02.md
 │       ├── phase-03.md
 │       ├── phase-04.md
-│       └── phase-05.md
+│       ├── phase-05.md
+│       ├── phase-06.md
+│       └── phase-07.md
 │
 ├── .env.example
 ├── .gitignore
@@ -259,17 +316,50 @@ and an appropriate status code, so no route ever hand-rolls its own error respon
 
 `POST /api/submissions/:id/review` (Phase 5 — full reference in
 [docs/api.md](docs/api.md#post-apisubmissionsidreview) and
-[docs/ai-analysis.md](docs/ai-analysis.md)) is the newest endpoint: `src/controllers/
-reviews.controller.ts` loads the stored submission, runs `analyzeSolution()` from
-`@codereviewai/analysis` fresh, and calls `src/ai/ai-review.service.ts` — which builds a prompt
-(`src/ai/prompts/reviewPrompt.ts`), calls an injected `AiProvider` (`src/ai/providers/` — the
-real implementation calls Anthropic's Messages API; a `mockProvider.ts` exists for tests only
-and is excluded from the production build), and validates the raw response against
-`src/ai/schemas/solutionReview.schema.ts` before trusting it. `src/ai/agreement.ts` then
-compares the deterministic and AI complexity/pattern claims and reports exactly where they
-agree or don't (`ai/types.ts`'s `CombinedSolutionReview` keeps both analyses and the
-comparison side by side — never merged). Every AI-specific failure is one `AiReviewError`
-(`src/ai/errors.ts`), translated to an HTTP status in the controller.
+[docs/ai-analysis.md](docs/ai-analysis.md)), `POST /api/submissions/:id/document` (Phase 6 —
+full reference in [docs/api.md](docs/api.md#post-apisubmissionsiddocument) and
+[docs/document-generation.md](docs/document-generation.md)), and
+`POST /api/submissions/:id/publish` (Phase 7 — full reference in
+[docs/api.md](docs/api.md#post-apisubmissionsidpublish) and
+[docs/github-integration.md](docs/github-integration.md)) all load the stored submission and
+then call `src/services/combined-review.service.ts`'s `buildCombinedReview()` (extracted in
+Phase 6 so the three endpoints share one implementation instead of drifting apart): it runs
+`analyzeSolution()` from `@codereviewai/analysis` fresh, then calls `src/ai/ai-review.service.ts`
+— which builds a prompt (`src/ai/prompts/reviewPrompt.ts`), calls an injected `AiProvider`
+(`src/ai/providers/` — real implementations call Anthropic's Messages API or Google's Gemini
+`generateContent` API, selected by `AI_PROVIDER` via `createProviderFromEnv.ts`; a
+`mockProvider.ts` exists for tests only and is excluded from the production build), and
+validates the raw response against `src/ai/schemas/solutionReview.schema.ts` before trusting it.
+`src/ai/agreement.ts` then compares the deterministic and AI complexity/pattern claims and
+reports exactly where they agree or don't (`ai/types.ts`'s `CombinedSolutionReview` keeps both
+analyses and the comparison side by side — never merged). Every AI-specific failure is one
+`AiReviewError` (`src/ai/errors.ts`), translated to an HTTP status by
+`src/controllers/aiErrorMapping.ts` (also extracted in Phase 6, shared by all three controllers).
+
+`reviews.controller.ts` returns the `CombinedSolutionReview` as-is; `documents.controller.ts`
+and `publish.controller.ts` both instead pass it to `src/document/document-generator.ts`'s
+`generateDocument()`, which builds a complete 18-section Markdown document from
+`src/document/templates/*` — each built exclusively from `src/document/markdown/markdown.ts`'s
+primitives (`heading()`, `bulletList()`, `codeBlock()`, `table()`, `escapeMarkdown()`) — and
+computes a safe filename via `src/document/formatter/filename.ts`. The submitted code is passed
+into `codeBlock()` completely unescaped and unmodified (labeled **YOUR SOLUTION**); every other
+piece of dynamic text (problem descriptions, AI prose) is run through `escapeMarkdown()` first,
+so it can never inject rogue document structure.
+
+`publish.controller.ts` (Phase 7) then hands that generated document to
+`src/services/github-publish.service.ts`'s `GitHubPublishService.publish()`, which orchestrates
+`src/github/*`'s single-purpose services — `repository.service.ts` (confirms `GITHUB_REPO` is
+reachable), `file.service.ts` (checks whether `problems/NNN-slug/README.md` already exists —
+this is the duplicate check), `commit.service.ts` (builds a specific, meaningful commit message
+like `"docs: add analysis for Two Sum"`), `problemPath.ts` (reuses Phase 6's
+`document/formatter/filename.ts` to build the nested repo path), and `readmeTable.ts`
+(re-renders and merges the root README's table between HTML-comment markers, byte-for-byte
+preserving any hand-written content outside them). A request explicitly states
+`mode: "create"` or `"update"`; publishing an already-existing problem in `"create"` mode is
+**rejected** with `409 GITHUB_CONFLICT` rather than silently overwritten. Every GitHub call goes
+through `src/github/github-client.ts` — the only file that imports `@octokit/rest` — behind a
+`GitHubClient` interface every other file depends on instead (a `mockGitHubClient.ts` exists for
+tests only and is excluded from the production build).
 
 ### `apps/extension` — Chrome Extension (Manifest V3)
 
@@ -335,9 +425,11 @@ mathematical certainty. `src/code-review/` and `src/edge-case-analyzer/` flag
 style/maintainability and input-robustness concerns respectively. `src/shared/codeStructure.ts`
 holds the loop-nesting and recursion-detection primitives every other module depends on.
 `src/fixtures/` holds real example solutions for the 7 required problems, used throughout the
-test suite. As of Phase 5, `analyzeSolution()` is called by `apps/api/src/controllers/
-reviews.controller.ts` on every `POST /api/submissions/:id/review` request, recomputed fresh
-each time rather than cached. Full detail: [docs/phases/phase-04.md](docs/phases/phase-04.md).
+test suite. As of Phase 5, `analyzeSolution()` is called by `apps/api/src/services/
+combined-review.service.ts`'s `buildCombinedReview()` — shared by every
+`POST /api/submissions/:id/review` (Phase 5), `POST /api/submissions/:id/document` (Phase 6),
+and `POST /api/submissions/:id/publish` (Phase 7) request, recomputed fresh each time rather
+than cached. Full detail: [docs/phases/phase-04.md](docs/phases/phase-04.md).
 
 ### `docs/`
 
@@ -376,14 +468,26 @@ Project-level documentation, described in [Documentation](#documentation-map) be
   `@codereviewai/shared` for TypeScript types, so a change to a shared contract (like
   `ApiResponse<T>`) is caught by the type checker in every consumer at once.
 - **`packages/analysis` ↔ `apps/api` (implemented, Phase 5):** `analyzeSolution()` is now a
-  real dependency of `apps/api`, called fresh on every `POST /api/submissions/:id/review`
-  request.
-- **`apps/api` ↔ Anthropic API (implemented, Phase 5, server-side only):** the AI review layer
-  calls Anthropic's Messages API directly over `fetch`, behind the swappable `AiProvider`
-  interface. `AI_PROVIDER_API_KEY` is read once, server-side, when constructing the real
-  provider — it's never included in any HTTP response, and neither `apps/web` nor
+  real dependency of `apps/api`, called fresh on every `POST /api/submissions/:id/review`,
+  `POST /api/submissions/:id/document`, and `POST /api/submissions/:id/publish` request.
+- **`apps/api` ↔ Anthropic/Gemini API (implemented, Phase 5, server-side only):** the AI review
+  layer calls the selected vendor's API directly over `fetch` (Anthropic's Messages API or
+  Google's Gemini `generateContent` API, chosen by `AI_PROVIDER`), behind the swappable
+  `AiProvider` interface. `AI_PROVIDER_API_KEY` is read once, server-side, when constructing the
+  real provider — it's never included in any HTTP response, and neither `apps/web` nor
   `apps/extension` has any code path that could read it. See
   [docs/ai-analysis.md](docs/ai-analysis.md#privacy).
+- **`apps/api` ↔ GitHub API (implemented, Phase 7, server-side only):** the publishing layer
+  calls the GitHub REST API via `@octokit/rest`, behind the swappable `GitHubClient` interface.
+  `GITHUB_TOKEN` is read once, server-side, when constructing the real client — it's never
+  included in any HTTP response, and neither `apps/web` nor `apps/extension` has any code path
+  that could read it. See
+  [docs/github-integration.md](docs/github-integration.md#authentication-and-token-handling).
+- **`POST /api/submissions/:id/review` ↔ `.../document` ↔ `.../publish` (implemented, Phase
+  6–7):** all three endpoints call the same `buildCombinedReview()` helper
+  (`apps/api/src/services/combined-review.service.ts`), so a generated document — whether
+  returned directly or committed to GitHub — is always built from a review computed the
+  identical way, never a separately-derived or stale one.
 
 ## 14–17. Development setup, installation, environment variables, running
 
@@ -391,6 +495,12 @@ Project-level documentation, described in [Documentation](#documentation-map) be
 
 - Node.js ≥ 20 (developed against Node 24)
 - npm ≥ 10 (ships with modern Node)
+- An API key for an AI provider (`AI_PROVIDER_API_KEY`) is needed **only** to actually call
+  `POST /api/submissions/:id/review`, `.../document`, or `.../publish` — every other command,
+  endpoint, and test works with no key configured at all.
+- A GitHub personal access token (`GITHUB_TOKEN`) and target repository (`GITHUB_REPO`) are
+  needed **only** to actually call `POST /api/submissions/:id/publish` — every other command,
+  endpoint, and test works with no GitHub configuration at all.
 
 ### Installation
 
@@ -398,8 +508,9 @@ Project-level documentation, described in [Documentation](#documentation-map) be
 npm install
 ```
 
-This installs every workspace's dependencies and automatically builds `packages/shared`
-(via a `postinstall` hook), since the API and web app resolve it as a normal npm package.
+This installs every workspace's dependencies and automatically builds `packages/shared` and
+`packages/analysis` (via a `postinstall` hook), since the API and web app resolve both as
+normal npm packages.
 
 ### Environment variables
 
@@ -414,11 +525,11 @@ cp .env.example apps/api/.env
 | `PORT`               | apps/api | `4000`                    | Port the Express server listens on.                              |
 | `NODE_ENV`           | apps/api | `development`             | Standard Node environment flag.                                   |
 | `CORS_ORIGIN`        | apps/api | `http://localhost:5173`   | Origin allowed to call the API.                                    |
-| `AI_PROVIDER_API_KEY` | apps/api | *(none)*                  | Anthropic API key. Only `POST /api/submissions/:id/review` needs it — every other endpoint works fully without it. |
-| `AI_PROVIDER_MODEL`   | apps/api | `claude-sonnet-5`          | Which Claude model the review endpoint calls.                     |
-
-`GITHUB_TOKEN`/`GITHUB_REPO` are documented in `.env.example` but **not read by any code yet**
-— they belong to Phase 7.
+| `AI_PROVIDER`         | apps/api | `anthropic`                | Which AI vendor to call: `anthropic` or `gemini`.                  |
+| `AI_PROVIDER_API_KEY` | apps/api | *(none)*                  | API key for the selected provider. Only `POST /api/submissions/:id/review` needs it — every other endpoint works fully without it. |
+| `AI_PROVIDER_MODEL`   | apps/api | `claude-sonnet-5` (Anthropic) / `gemini-3.6-flash` (Gemini) | Which model the review endpoint calls.       |
+| `GITHUB_TOKEN`        | apps/api | *(none)*                   | A personal access token (Contents read/write on the target repo). Only `POST /api/submissions/:id/publish` needs it — every other endpoint works fully without it. |
+| `GITHUB_REPO`         | apps/api | *(none)*                   | The target repository to publish into, as `"owner/repo"`.          |
 
 ### Running the project
 
@@ -440,10 +551,15 @@ open any `https://leetcode.com/problems/<slug>/` page, then click the extension 
 **Submit Solution** sends the extraction to the API and shows the stored result — see
 [docs/api.md](docs/api.md) for the endpoint it calls.
 
-To try the AI review (Phase 5 — no extension/web UI triggers this yet, so use `curl` or
-similar): set `AI_PROVIDER_API_KEY` in `apps/api/.env`, create a submission as above to get an
-`id`, then `curl -X POST http://localhost:4000/api/submissions/<id>/review`. Without a key
-configured, this endpoint still responds — with a clear `502 AI_PROVIDER_ERROR` — rather than
+To try the AI review (Phase 5), document generation (Phase 6), or GitHub publishing (Phase 7) —
+no extension/web UI triggers any of them yet, so use `curl` or similar: set
+`AI_PROVIDER_API_KEY` (and, for publishing, `GITHUB_TOKEN`/`GITHUB_REPO`) in `apps/api/.env`,
+create a submission as above to get an `id`, then
+`curl -X POST http://localhost:4000/api/submissions/<id>/review`,
+`curl -X POST http://localhost:4000/api/submissions/<id>/document`, or
+`curl -X POST http://localhost:4000/api/submissions/<id>/publish -H "Content-Type:
+application/json" -d '{"mode":"create"}'`. Without the relevant configuration, each endpoint
+still responds — with a clear `502 AI_PROVIDER_ERROR` or `502 GITHUB_AUTH_FAILED` — rather than
 crashing the server; every other endpoint is completely unaffected either way.
 
 ## 18. Testing
@@ -454,22 +570,35 @@ npm run test -w @codereviewai/api        # a single workspace
 npm run test:watch -w @codereviewai/web  # watch mode (per-workspace script)
 ```
 
-Each workspace uses Vitest — 232 tests total. `apps/api` additionally uses Supertest to
+Each workspace uses Vitest — 401 tests total. `apps/api` additionally uses Supertest to
 exercise the Express app over HTTP without binding a real port, covering `POST /api/submissions`
 at every layer (schema rules, service normalization, repository round-trips, and full
 HTTP-level integration — valid submission, invalid submission, missing code, invalid language,
-invalid URL, malformed/non-JSON payload) and, since Phase 5, `POST /api/submissions/:id/review`
-the same way (a full create-then-review round trip, an end-to-end disagreement scenario using
-real nested-loop code against a mocked AI claiming the wrong complexity, a 404 for an unknown
-id, and one test per AI failure mode mapped to its HTTP status); `apps/web` uses React Testing
-Library with a `jsdom` environment; `apps/extension`'s LeetCode adapter tests construct
-synthetic pages with `jsdom`'s `JSDOM` class directly (URL detection,
-slug/title/difficulty/code extraction, and — importantly — that missing fields come back
-`null` instead of guessed values), and `lib/api.test.ts` exercises the extension's API client
-against a stubbed `fetch`; `packages/analysis` (73 tests) covers every pattern-detection rule,
-every complexity/code-quality/edge-case heuristic, and all 7 required-problem fixtures run
-end-to-end through `analyzeSolution()`. **No test anywhere makes a real AI API call** — every
-AI-facing test in `apps/api/src/ai/` uses `providers/mockProvider.ts` or a mocked `fetch`.
+invalid URL, malformed/non-JSON payload), `POST /api/submissions/:id/review` (since Phase 5 — a
+full create-then-review round trip, an end-to-end disagreement scenario using real nested-loop
+code against a mocked AI claiming the wrong complexity, a 404 for an unknown id, and one test
+per AI failure mode mapped to its HTTP status), `POST /api/submissions/:id/document` (since
+Phase 6 — the same error-mapping coverage, plus 35 dedicated `document-generator.test.ts` tests
+checking every required section is present and in order, exact byte-for-byte code preservation
+including code containing its own triple-backtick sequences, that the submitted code and a
+populated "Better Approach" are never confused, correct handling of every missing/empty
+optional field, and that Markdown-significant characters embedded in AI prose or an extracted
+problem description can never inject rogue document structure), and
+`POST /api/submissions/:id/publish` (since Phase 7 — repository lookup, file creation and
+update, duplicate detection in both directions — a `"create"` against an existing problem is
+rejected, an `"update"` against a nonexistent one is rejected — the byte-identical-content no-op
+path, commit-message generation that's asserted to never be generic, and every GitHub API
+failure mode); `apps/web` uses React Testing Library with a `jsdom` environment;
+`apps/extension`'s LeetCode adapter tests construct synthetic pages with `jsdom`'s `JSDOM` class
+directly (URL detection, slug/title/difficulty/code extraction, and — importantly — that
+missing fields come back `null` instead of guessed values), and `lib/api.test.ts` exercises the
+extension's API client against a stubbed `fetch`; `packages/analysis` (73 tests) covers every
+pattern-detection rule, every complexity/code-quality/edge-case heuristic, and all 7
+required-problem fixtures run end-to-end through `analyzeSolution()`. **No test anywhere makes a
+real AI or GitHub API call** — every AI-facing test in `apps/api/src/ai/` and
+`apps/api/src/document/` uses `providers/mockProvider.ts` or a mocked `fetch`, and every
+GitHub-facing test in `apps/api/src/github/` uses `mockGitHubClient.ts` or an injected mock
+`fetch`.
 
 ## 19. Code quality commands
 
@@ -489,17 +618,19 @@ npm run format:check     # Prettier --check (used in CI-style verification)
 | 2     | Chrome extension: read problem + submission data from the LeetCode DOM (complete) |
 | 3     | API: endpoints to receive and store captured submissions (complete)    |
 | 4     | Deterministic (non-AI) solution-analysis engine: pattern detection, complexity heuristics, code quality, edge cases (complete) |
-| 5     | AI-powered solution review, layered on top of Phase 4's deterministic analysis (this phase) |
-| 6     | Learning document generation from the combined review + real (database) persistence |
-| 7     | GitHub integration: commit generated documents automatically           |
-| 8     | Web dashboard: browse past submissions and documents                   |
+| 5     | AI-powered solution review, layered on top of Phase 4's deterministic analysis (complete) |
+| 6     | Learning document generation from the combined review (complete)       |
+| 7     | GitHub integration: commit generated documents automatically (this phase) |
+| 8     | Web dashboard: browse past submissions and documents (real, database persistence likely lands around here — see below) |
 | 9     | Authentication and per-user data                                       |
 | 10    | Polish, deployment, end-to-end hardening                               |
 
-*(Note: an earlier draft of this table listed "persistence layer" as Phase 4 — Phase 4 was
-actually the analysis engine documented below; persistence is now folded into Phase 6, since
-that's the phase that first needs to durably store more than a submission — its AI analysis and
-generated document too.)*
+*(Note: an earlier draft of this table listed "persistence layer" as Phase 4, and a later draft
+folded persistence into Phase 6 alongside document generation — Phase 4 turned out to be the
+analysis engine documented below, and Phase 6 turned out to be document generation only, with no
+persistence. Each phase's actual scope is set by that phase's own kickoff instructions, not
+predicted in advance by this table; treat "database persistence" as still-undated until a phase
+actually claims it.)*
 
 ## 21. Phase status
 
@@ -515,30 +646,43 @@ generated document too.)*
   [docs/phases/phase-05.md](docs/phases/phase-05.md) and
   [docs/ai-analysis.md](docs/ai-analysis.md) for the full record of what was built, verified,
   and why.
+- **Phase 6 — Document Generation: complete.** See
+  [docs/phases/phase-06.md](docs/phases/phase-06.md) and
+  [docs/document-generation.md](docs/document-generation.md) for the full record of what was
+  built, verified, and why.
+- **Phase 7 — GitHub Integration: complete.** See
+  [docs/phases/phase-07.md](docs/phases/phase-07.md) and
+  [docs/github-integration.md](docs/github-integration.md) for the full record of what was
+  built, verified, and why.
 
-Phases 6–10 have not been started.
+Phases 8–10 have not been started.
 
 ## 22. Future architecture
 
 Later phases add, without changing what exists today:
-
-- **Learning-document generation** — rendering a `CombinedSolutionReview` (Phase 5's output)
-  into a structured Markdown document (Phase 6).
+- **OAuth-based GitHub authentication**, replacing the single `GITHUB_TOKEN` (Phase 7's MVP)
+  with a per-user flow — `github/auth.ts`'s `GitHubAuthProvider` interface was built specifically
+  so this is a new implementation of that interface, not a change to `github-client.ts` or
+  anything above it. See
+  [docs/github-integration.md#future-oauth-design](docs/github-integration.md#future-oauth-design).
 - **Persistence** in `apps/api` (database TBD — likely PostgreSQL or SQLite for a portfolio
   deployment) implementing the existing `SubmissionRepository` interface, replacing
-  `InMemorySubmissionRepository` with no change to the service/controller/route above it (Phase
-  6, alongside learning-document generation) — this is also the point where a *generated
-  review* itself becomes worth persisting, not just the raw submission.
+  `InMemorySubmissionRepository` with no change to the service/controller/route above it — this
+  is also the point where a *generated review* or *generated document* itself becomes worth
+  persisting, not just the raw submission. Not yet assigned to a specific phase.
 - Read endpoints (`GET /api/submissions`, `GET /api/submissions/:id`) once there's a
   persistence layer worth reading from — `findById` already exists on the repository interface
   (added in Phase 5 for the review endpoint's internal use), so this is mostly a routing
   addition.
-- Retry logic and response caching for AI review requests, and extension/web UI that actually
-  triggers `POST /api/submissions/:id/review` (see
-  [docs/ai-analysis.md#limitations](docs/ai-analysis.md#limitations)).
-- A **GitHub integration module** that authenticates (OAuth or a personal access token) and
-  commits generated Markdown documents to a user-configured repository.
+- Retry logic and response caching for AI review/document-generation/publish requests, and
+  extension/web UI that actually triggers `POST /api/submissions/:id/review`,
+  `.../document`, or `.../publish` (see
+  [docs/ai-analysis.md#limitations](docs/ai-analysis.md#limitations),
+  [docs/document-generation.md#limitations](docs/document-generation.md#limitations), and
+  [docs/github-integration.md#limitations](docs/github-integration.md#limitations)).
 - A **dashboard** in `apps/web` for browsing historical submissions and documents.
+- **`patterns/` in the published repository** — reserved but deliberately unimplemented in
+  Phase 7 ("do not overbuild pattern files yet").
 
 Full detail and diagrams: [docs/architecture.md](docs/architecture.md).
 
@@ -565,11 +709,21 @@ Full detail and diagrams: [docs/architecture.md](docs/architecture.md).
   part of a submitted payload. The Phase 4 analysis engine holds the same line: every check is
   a regex/text heuristic over the source string — no `eval`, no sandboxed execution, nothing
   that runs submitted code. The Phase 5 AI review layer sends the code as prompt text and gets
-  text back; it never executes it either.
+  text back; it never executes it either. The Phase 6 document generator embeds that same code,
+  byte-for-byte, inside a Markdown fence — displayed, never executed — and Phase 7 commits that
+  exact fenced document to GitHub unchanged, still never executing anything.
+- **Generated documents can't be used to inject Markdown structure.** Every piece of dynamic
+  prose in a Phase 6 document (problem descriptions, every AI-generated string) is run through
+  `document/markdown/markdown.ts`'s `escapeMarkdown()` first, which neutralizes leading
+  heading/list/blockquote/code-fence markers and escapes inline-significant characters — an AI
+  response or extracted description can never inject a rogue heading, list item, or break out
+  of a fenced code block. See
+  [docs/document-generation.md#escaping](docs/document-generation.md#escaping).
 - **The AI provider API key never reaches the browser, the extension, or the frontend.**
-  `AI_PROVIDER_API_KEY` is read exactly once, server-side, in `apps/api/src/routes/index.ts`
-  when constructing the real Anthropic provider — never included in any HTTP response, and
-  nothing in `apps/web`/`apps/extension` has any code path that could read it.
+  `AI_PROVIDER_API_KEY` is read exactly once, server-side, in
+  `apps/api/src/ai/providers/createProviderFromEnv.ts` when constructing the real provider
+  (Anthropic or Gemini, per `AI_PROVIDER`) — never included in any HTTP response, and nothing in
+  `apps/web`/`apps/extension` has any code path that could read it.
 - **The AI request sends only what's needed to review the code** — the problem, the submitted
   code/language, and Phase 4's deterministic analysis. A submission's `id` and
   `metadata.receivedAt`/`extractedAt`/`source` are never forwarded, since none of them would
@@ -578,22 +732,34 @@ Full detail and diagrams: [docs/architecture.md](docs/architecture.md).
   before it's used anywhere, and its complexity/pattern claims are explicitly compared
   against — never silently substituted for — Phase 4's independently-computed analysis. See
   [docs/ai-analysis.md](docs/ai-analysis.md#hallucination-mitigation).
-- A future GitHub token (Phase 7) must keep the same server-side-only discipline — never in
-  the frontend or extension bundle, since both ship code to the client/browser.
+- **The GitHub token never reaches the browser, the extension, or the frontend — a verified
+  property, as of Phase 7.** `GITHUB_TOKEN` is read exactly once, server-side, in
+  `apps/api/src/github/auth.ts` (via `github/createGitHubClientFromEnv.ts`) — never hardcoded,
+  never logged, and never included in any HTTP response (`PublishResult` returns a `commitUrl`,
+  not the token). See
+  [docs/github-integration.md#authentication-and-token-handling](docs/github-integration.md#authentication-and-token-handling).
+- **A duplicate is never silently overwritten.** `POST /api/submissions/:id/publish` rejects a
+  `mode: "create"` request against a problem that's already published (`409 GITHUB_CONFLICT`)
+  rather than overwriting it; an intentional overwrite requires the caller to explicitly pass
+  `mode: "update"`. See
+  [docs/github-integration.md#duplicate-handling](docs/github-integration.md#duplicate-handling).
+- **Every GitHub write path is sanitized against path traversal.** `github/problemPath.ts`
+  reuses Phase 6's slug-sanitization logic, so a malformed problem slug (`../../etc/passwd`-shaped
+  input) collapses into ordinary hyphens rather than writing outside `problems/`.
 
-## 24. GitHub integration plan
+## 24. GitHub integration
 
-Not implemented yet. Planned approach (Phase 7): the backend authenticates to GitHub (a
-personal access token or GitHub App, configured via `GITHUB_TOKEN`/`GITHUB_REPO` — see
-`.env.example`) and uses the GitHub REST API to create or update a Markdown file per analyzed
-submission in a user-specified repository, effectively building an auto-maintained log of
-solved problems.
+**Implemented as of Phase 7.** See
+[GitHub publishing](#25-ai-integration-document-generation-and-github-publishing) below for the
+full description, and [docs/github-integration.md](docs/github-integration.md) for the complete
+design (repository layout, commit process, duplicate handling, and the future OAuth design).
 
-## 25. AI integration
+## 25. AI integration, document generation, and GitHub publishing
 
-**Implemented as of Phase 5.** `POST /api/submissions/:id/review` runs Phase 4's deterministic
-`analyzeSolution()` first, then sends the problem, the submitted code, and that deterministic
-analysis to Anthropic Claude (configured via `AI_PROVIDER_API_KEY`/`AI_PROVIDER_MODEL`) with a
+**AI integration implemented as of Phase 5.** `POST /api/submissions/:id/review` runs Phase 4's
+deterministic `analyzeSolution()` first, then sends the problem, the submitted code, and that
+deterministic analysis to the configured AI provider — Anthropic Claude or Google Gemini,
+selected via `AI_PROVIDER` and configured via `AI_PROVIDER_API_KEY`/`AI_PROVIDER_MODEL` — with a
 structured prompt answering all 16 required review questions (approach, pattern, why it works,
 complexity, strengths, improvements, correctness concerns, missed edge cases, optimality, a
 better approach if one exists and why, learning points, and related patterns to practice). The
@@ -604,8 +770,39 @@ AI failure mode (timeout, provider error, rate limit, malformed/invalid response
 specific HTTP status rather than crashing the process. See
 [docs/ai-analysis.md](docs/ai-analysis.md) for the full architecture, and
 [docs/phases/phase-05.md](docs/phases/phase-05.md) for a worked example, including a
-disagreement example. **Not yet built:** rendering this into the learning document (Phase 6) or
-committing it to GitHub (Phase 7).
+disagreement example.
+
+**Document generation implemented as of Phase 6.** `POST /api/submissions/:id/document` reuses
+that exact same pipeline (via `buildCombinedReview()`, shared between both endpoints) and turns
+the resulting `CombinedSolutionReview` into a complete, 18-section Markdown document —
+`document/document-generator.ts` and its `templates/`/`markdown/`/`formatter/` submodules,
+described in [Repository structure](#8-repository-structure) above. The submitted code is
+embedded exactly as submitted, labeled **YOUR SOLUTION**; a recommended alternative (when one
+exists) is labeled **RECOMMENDED SOLUTION** and includes working pseudocode and code — a small
+extension to Phase 5's AI schema, since the review endpoint's data didn't previously carry
+runnable code. See [docs/document-generation.md](docs/document-generation.md) for the full
+schema, and [docs/phases/phase-06.md](docs/phases/phase-06.md) for a worked example generated
+live against the real Gemini API.
+
+**GitHub publishing implemented as of Phase 7.** `POST /api/submissions/:id/publish` reuses that
+exact same document (via `generateDocument()`, called from the exact same
+`buildCombinedReview()` result) and commits it to a configured repository:
+`problems/NNN-slug/README.md`, a structured `problems/index.json`, and a root `README.md` table
+kept in sync between clear HTML-comment markers — never destroying hand-written README content
+outside them. Every GitHub call goes through `@octokit/rest`, isolated behind a swappable
+`GitHubClient` interface (mirroring the AI provider abstraction exactly — one interface, one
+real implementation, one test-only mock). A request states `mode: "create"` or `"update"`
+explicitly; publishing an already-existing problem in `"create"` mode is **rejected**
+(`409 GITHUB_CONFLICT`) rather than silently overwritten, and every write gets a specific commit
+message (`"docs: add analysis for Two Sum"`, never a generic one). Token-based auth only for
+now (`GITHUB_TOKEN`) — `github/auth.ts`'s `GitHubAuthProvider` interface is built so a future
+OAuth flow is a new implementation of that interface, not a rewrite. See
+[docs/github-integration.md](docs/github-integration.md) for the full design, and
+[docs/phases/phase-07.md](docs/phases/phase-07.md) for a complete worked example (the exact
+GitHub API calls a publish makes, and the resulting repository layout). **Not yet built:** OAuth
+(token-only for now), and no web/extension UI triggers a publish yet — the endpoint returns
+everything a UI would need (`status`, `path`, `commitUrl`), but nothing calls it outside tests
+and manual `curl` requests.
 
 ## 26. Contribution / development guidelines
 
@@ -633,25 +830,53 @@ committing it to GitHub (Phase 7).
 - **No persistent storage.** `POST /api/submissions` stores submissions in memory
   (`InMemorySubmissionRepository`) — everything is lost when the API process restarts. This
   was explicit Phase 3 scope ("do NOT introduce PostgreSQL yet unless genuinely required");
-  real persistence is Phase 4.
-- No read endpoints exposing submissions directly — a submission can be created and reviewed
-  (`POST /api/submissions/:id/review` looks it up internally via the repository's `findById`),
-  but there's no `GET /api/submissions/:id` to fetch one back directly yet.
+  real persistence is not yet assigned to a specific phase — see
+  [Development roadmap](#20-development-roadmap) above.
+- No read endpoints exposing submissions directly — a submission can be created, reviewed
+  (`POST /api/submissions/:id/review`), turned into a document
+  (`POST /api/submissions/:id/document`), and published to GitHub
+  (`POST /api/submissions/:id/publish`) — all three look it up internally via the repository's
+  `findById` — but there's no `GET /api/submissions/:id` to fetch one back directly yet.
+- **No local document persistence.** `POST /api/submissions/:id/document` returns the generated
+  Markdown in the response only; nothing is saved to disk. `POST /api/submissions/:id/publish`
+  does commit it to GitHub (Phase 7), but that's the only place it's persisted — see
+  [docs/document-generation.md#limitations](docs/document-generation.md#limitations) and
+  [docs/github-integration.md#limitations](docs/github-integration.md#limitations).
 - **Phase 4's analysis engine has its own heuristic limitations** (no AST/execution, functional
   iteration not counted as looping, regexes that assume one balanced paren pair) — see
   [docs/phases/phase-04.md](docs/phases/phase-04.md#limitations). These carry through to the
   AI review, which is grounded in that same deterministic analysis.
 - **The real Anthropic provider was never exercised against the live API in this
-  environment** — no real, billed API call was made during this phase's development or
-  verification; every test uses a mocked provider. See
+  environment** — no Anthropic key has been available here. **The Gemini provider was
+  exercised once, manually, against the live API** (a real `AI_PROVIDER=gemini` review call
+  returned a well-formed, schema-valid response and a genuine surfaced disagreement), but that
+  was a single ad hoc check, not a repeatable one — every automated test, for both providers,
+  uses a mocked provider or a mocked `fetch`. See
   [docs/ai-analysis.md#limitations](docs/ai-analysis.md#limitations).
-- **No retry logic or response caching for AI reviews** — a transient failure surfaces
-  immediately as an error rather than being retried, and requesting a review twice for the same
-  submission calls the AI provider twice, at full cost.
-- **No extension or web UI triggers a review yet** — the endpoint exists, is fully tested, and
-  works when called directly (e.g. via `curl`), but nothing in `apps/extension`/`apps/web`
-  calls it.
-- No learning-document generation and no GitHub integration exist yet.
+- **No retry logic or response caching for AI reviews, generated documents, or GitHub
+  publishes** — a transient failure surfaces immediately as an error rather than being retried,
+  and calling any of the three endpoints twice for the same submission redoes the full work (a
+  fresh AI call, plus up to three fresh GitHub commits for `/publish`), at full cost, each time.
+- **No extension or web UI triggers a review, a document generation, or a publish yet** — all
+  three endpoints exist, are fully tested, and work when called directly (e.g. via `curl`), but
+  nothing in `apps/extension`/`apps/web` calls any of them.
+- **The document generator's escaping targets GitHub-Flavored Markdown, not strict CommonMark**,
+  and "Is My Solution Optimal?" only ever answers Yes/No (Phase 5's `optimality.isOptimal` is a
+  plain boolean, not a tri-state) — see
+  [docs/document-generation.md#limitations](docs/document-generation.md#limitations).
+- **GitHub publishing was never exercised against the real GitHub API in this environment** —
+  no GitHub token was available (or appropriate to use, given a real commit's permanence) here.
+  Every test uses a mocked `GitHubClient` or an injected mock `fetch`. See
+  [docs/github-integration.md#limitations](docs/github-integration.md#limitations).
+- **No OAuth for GitHub** — only a single, manually-issued personal access token
+  (`GITHUB_TOKEN`), per Phase 7's explicit MVP scope. The abstraction is ready
+  (`GitHubAuthProvider`), but no OAuth implementation exists. See
+  [docs/github-integration.md#future-oauth-design](docs/github-integration.md#future-oauth-design).
+- **A publish is up to three separate, non-atomic commits** (the problem document,
+  `problems/index.json`, and the root README), not one — GitHub's simple Contents API was used
+  for MVP simplicity over the lower-level Git Data API, which could batch them into one commit.
+- **`patterns/` in the published repository is unimplemented** — reserved in the documented
+  layout, written by no code, per Phase 7's explicit "do not overbuild" instruction.
 - No authentication or multi-user support — every request is trusted as the extension's own
   user; there's no concept of a logged-in user yet.
 - The web app's only real feature is a health-check status display; there is no dashboard yet.
@@ -692,6 +917,27 @@ committing it to GitHub (Phase 7).
 - Improve `ai/agreement.ts`'s complexity comparison from a normalized string match toward a
   light symbolic equivalence check (e.g. so `"O(n + m)"` and `"O(m + n)"` aren't flagged as
   disagreeing) — see [docs/ai-analysis.md#limitations](docs/ai-analysis.md#limitations).
+- Widen `SolutionReview.optimality` from a plain boolean to a 3-state
+  `Yes`/`No`/`Depends`-shaped answer, so the document's "Is My Solution Optimal?" section can
+  express genuine ambiguity instead of only ever answering Yes or No — see
+  [docs/document-generation.md#limitations](docs/document-generation.md#limitations).
+- Save a generated document to disk (or object storage) and/or add a document-persistence
+  layer once real (database) persistence exists, so `POST /api/submissions/:id/document` isn't
+  regenerated from scratch, at full AI cost, on every call for the same submission.
+- Verify `github/github-client.ts` against a real GitHub API call with a real token and a
+  disposable test repository — every test mocks the client or injects a mock `fetch`, so its
+  request-building/response-parsing logic has never been confirmed against GitHub's actual live
+  response format.
+- Implement OAuth-based GitHub authentication (`github/auth.ts`'s `GitHubAuthProvider` is ready
+  for it) once the project has user accounts — see
+  [docs/github-integration.md#future-oauth-design](docs/github-integration.md#future-oauth-design).
+- Move from GitHub's simple Contents API to the lower-level Git Data API so a publish's problem
+  document, index, and README updates land as one atomic commit instead of up to three separate
+  ones.
+- Add retry-with-backoff for transient GitHub API failures, matching the planned AI-provider
+  retry behavior above.
+- Build out `patterns/` in the published repository once there's a clear design for what a
+  per-pattern file should contain — deliberately deferred in Phase 7 ("do not overbuild").
 
 ---
 
@@ -706,6 +952,12 @@ committing it to GitHub (Phase 7).
 - [docs/ai-analysis.md](docs/ai-analysis.md) — the AI review layer's architecture, prompt
   design, structured-output validation, deterministic-vs-AI comparison, hallucination
   mitigation, limitations, privacy, and cost considerations.
+- [docs/document-generation.md](docs/document-generation.md) — the document generation layer's
+  schema, template architecture, filename strategy, escaping rules, and exact-code-preservation
+  guarantee.
+- [docs/github-integration.md](docs/github-integration.md) — the GitHub publishing layer's API
+  usage, authentication and token handling, repository structure, commit process, duplicate
+  handling, and future OAuth design.
 - [docs/development.md](docs/development.md) — prerequisites, setup, commands, and
   troubleshooting.
 - [docs/phases/phase-01.md](docs/phases/phase-01.md) — the detailed record of Phase 1.
@@ -717,3 +969,7 @@ committing it to GitHub (Phase 7).
   (deterministic solution-analysis engine).
 - [docs/phases/phase-05.md](docs/phases/phase-05.md) — the detailed record of Phase 5
   (AI-powered solution review), including a full example input/output.
+- [docs/phases/phase-06.md](docs/phases/phase-06.md) — the detailed record of Phase 6
+  (document generation), including a full example generated document.
+- [docs/phases/phase-07.md](docs/phases/phase-07.md) — the detailed record of Phase 7
+  (GitHub integration), including the complete publish workflow.

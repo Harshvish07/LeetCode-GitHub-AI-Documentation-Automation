@@ -291,14 +291,161 @@ and it fails clearly rather than crashing the process when it's missing.
 
 ---
 
+## `POST /api/submissions/:id/document`
+
+**Purpose:** generates a complete Markdown learning document for a previously stored
+submission — the problem, the exact submitted code, Phase 4's deterministic analysis, Phase 5's
+AI review, and their agreement, combined into one human-readable `.md` file. Introduced in
+Phase 6. See [docs/document-generation.md](document-generation.md) for the full document
+schema, escaping rules, and filename strategy.
+
+Internally this runs the exact same deterministic-analysis-plus-AI-review pipeline as
+`POST /api/submissions/:id/review` (both call the same `buildCombinedReview()` helper) — it is
+**not** cheaper and **not** cached; each call makes a fresh AI provider request. It does not
+save the document anywhere; the response *is* the document.
+
+### Request
+
+No request body — `:id` is the id returned by `POST /api/submissions`.
+
+```
+POST /api/submissions/b33ae260-50f6-41ca-9062-cf75b13132fb/document
+```
+
+### Response — `200 OK`
+
+```ts
+interface GeneratedDocument {
+  filename: string; // a safe filename, e.g. "001-two-sum.md"
+  content: string; // the complete Markdown document
+}
+```
+
+See [docs/document-generation.md#example-document](document-generation.md#example-document) for
+a full real example (generated live against the Gemini provider).
+
+### Errors
+
+Identical error set to `POST /api/submissions/:id/review` (same underlying pipeline) — see that
+endpoint's error table above. `error.code` values: `NOT_FOUND`, `AI_RATE_LIMITED`,
+`INTERNAL_ERROR`, `AI_PROVIDER_ERROR`, `AI_MALFORMED_RESPONSE`, `AI_INVALID_RESPONSE`,
+`AI_TIMEOUT`.
+
+---
+
+## `POST /api/submissions/:id/publish`
+
+**Purpose:** generates the same document `POST /api/submissions/:id/document` does, then commits
+it to a configured GitHub repository — `problems/NNN-slug/README.md`, an updated
+`problems/index.json`, and a re-rendered root `README.md` table. Introduced in Phase 7. See
+[docs/github-integration.md](github-integration.md) for the full design, repository layout,
+commit process, and duplicate-handling contract.
+
+Runs the exact same `buildCombinedReview()` + `generateDocument()` pipeline as `/document`, so it
+costs the same (one fresh AI call, no caching) plus up to three GitHub API writes.
+
+### Request
+
+```ts
+interface PublishRequestBody {
+  /** Optional — defaults to "create". */
+  mode?: 'create' | 'update';
+}
+```
+
+```
+POST /api/submissions/b33ae260-50f6-41ca-9062-cf75b13132fb/publish
+Content-Type: application/json
+
+{ "mode": "create" }
+```
+
+`mode` is the explicit, typed way to state intent: `"create"` (the default) publishes a new
+problem and is **rejected** if one already exists at that path; `"update"` intentionally
+overwrites an existing one and is **rejected** if nothing exists yet. See
+[docs/github-integration.md#duplicate-handling](github-integration.md#duplicate-handling).
+
+### Response — `200 OK`
+
+```ts
+interface PublishResult {
+  status: 'created' | 'updated' | 'unchanged';
+  path: string; // e.g. "problems/001-two-sum/README.md"
+  commitUrl?: string; // omitted when status is "unchanged" (no commit was made)
+  index: { updated: boolean };
+  readme: { updated: boolean };
+}
+```
+
+`status: "unchanged"` means the document's content was byte-identical to what's already
+published — no commit was made anywhere, including to the index or README.
+
+### Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| `400` | `VALIDATION_ERROR` | `mode` is present but isn't `"create"` or `"update"`. |
+| `404` | `NOT_FOUND` | No submission exists with the given `:id`. |
+| `404` | `GITHUB_NOT_FOUND` | The repository doesn't exist/isn't visible to the token, or `mode="update"` was used but nothing has been published for this problem yet. |
+| `409` | `GITHUB_CONFLICT` | `mode="create"` (or omitted) against a problem that's already published — the "avoid accidental overwrite" case. Nothing is written. |
+| `429` | `GITHUB_RATE_LIMITED` | GitHub returned HTTP 403 (rate limited or insufficient token permissions). |
+| `429` | `AI_RATE_LIMITED` | The AI provider rate-limited the request. |
+| `500` | `INTERNAL_ERROR` | An unexpected server-side failure. |
+| `502` | `GITHUB_AUTH_FAILED` | `GITHUB_TOKEN`/`GITHUB_REPO` missing or invalid. |
+| `502` | `GITHUB_API_ERROR` | An unexpected GitHub API failure. |
+| `502` | `AI_PROVIDER_ERROR` / `AI_MALFORMED_RESPONSE` | Same AI-pipeline failures as `/review` and `/document`. |
+| `502` | `AI_INVALID_RESPONSE` | The AI's JSON response didn't match the required schema. |
+| `504` | `AI_TIMEOUT` | The AI provider didn't respond within the configured timeout. |
+
+#### Example — `409 GITHUB_CONFLICT`
+
+```json
+{
+  "success": false,
+  "error": {
+    "message": "A document for this problem already exists at \"problems/001-two-sum/README.md\". Re-submit with mode=\"update\" to intentionally overwrite it.",
+    "code": "GITHUB_CONFLICT"
+  }
+}
+```
+
+#### Example — `502 GITHUB_AUTH_FAILED` (no token configured)
+
+```json
+{
+  "success": false,
+  "error": {
+    "message": "GitHub is not configured: GITHUB_REPO must be set as \"owner/repo\" (got unset).",
+    "code": "GITHUB_AUTH_FAILED"
+  }
+}
+```
+
+This is the actual response `POST /api/submissions/:id/publish` returns in a local dev
+environment with no `GITHUB_REPO`/`GITHUB_TOKEN` set — every other endpoint (including
+`/review` and `/document`) works completely normally regardless; only this one endpoint requires
+GitHub configuration, and it fails clearly rather than crashing the process when it's missing.
+
+---
+
 ## Not yet implemented
 
 - No `GET /api/submissions` or `GET /api/submissions/:id` — the repository interface supports
   a full read path (`findById` was added in Phase 5), but no endpoint exposes it directly; the
-  only current read path is indirect, via `POST /api/submissions/:id/review`.
+  only current read paths are indirect, via `POST /api/submissions/:id/review`,
+  `POST /api/submissions/:id/document`, and `POST /api/submissions/:id/publish`.
+- No local document persistence — `POST /api/submissions/:id/document` returns the generated
+  Markdown in the response only; nothing is saved to disk. Phase 7's
+  `POST /api/submissions/:id/publish` does commit it to GitHub, but only there. See
+  [docs/document-generation.md#limitations](document-generation.md#limitations) and
+  [docs/github-integration.md#limitations](github-integration.md#limitations).
+- No OAuth for GitHub — only a single, manually-issued personal access token
+  (`GITHUB_TOKEN`), per the Phase 7 MVP scope. See
+  [docs/github-integration.md#future-oauth-design](github-integration.md#future-oauth-design).
 - No authentication — every request is currently trusted as coming from the user's own
   extension; there's no concept of a logged-in user yet.
 - No persistence beyond the API process's lifetime — see
   [docs/phases/phase-03.md](phases/phase-03.md#limitations).
-- No retry logic or caching for AI review requests — see
-  [docs/ai-analysis.md#limitations](ai-analysis.md#limitations).
+- No retry logic or caching for AI review, document, or publish requests — see
+  [docs/ai-analysis.md#limitations](ai-analysis.md#limitations) and
+  [docs/github-integration.md#limitations](github-integration.md#limitations).

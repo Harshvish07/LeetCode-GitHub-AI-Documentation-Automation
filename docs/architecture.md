@@ -1,11 +1,11 @@
 # Architecture
 
-This document describes the system architecture as it exists **today (through Phase 5)**,
+This document describes the system architecture as it exists **today (through Phase 7)**,
 plus the planned shape of later phases for context. Sections and diagram elements are
 explicitly marked as implemented or planned — nothing here should be read as already built
 unless labeled so.
 
-## System architecture (Phases 1–5 — implemented)
+## System architecture (Phases 1–7 — implemented)
 
 ```mermaid
 flowchart TB
@@ -23,10 +23,16 @@ flowchart TB
         Health["GET /api/health"]
         Submissions["POST /api/submissions<br/>validate → controller → service → repository"]
         Review["POST /api/submissions/:id/review<br/>ai/ai-review.service.ts"]
+        Document["POST /api/submissions/:id/document<br/>document/document-generator.ts"]
+        Publish["POST /api/submissions/:id/publish<br/>services/github-publish.service.ts"]
     end
 
-    subgraph "Anthropic API (external)"
-        Anthropic["Messages API"]
+    subgraph "AI Provider API (external, selected by AI_PROVIDER)"
+        AiProvider["Anthropic Messages API<br/>or Gemini generateContent API"]
+    end
+
+    subgraph "GitHub API (external)"
+        GH["Contents API<br/>via github/github-client.ts (Octokit)"]
     end
 
     subgraph "apps/extension (in Chrome)"
@@ -55,15 +61,23 @@ flowchart TB
     Api -- "POST, via host_permissions<br/>(bypasses CORS)" --> Submissions
     Submissions -- "imports at compile+runtime" --> Types
     Review -- "analyzeSolution()<br/>(Phase 5: real dependency)" --> Analysis
-    Review -- "server-side only, API key never leaves apps/api" --> Anthropic
+    Review -- "server-side only, API key never leaves apps/api" --> AiProvider
     Review -- "imports at compile+runtime" --> Types
+    Document -- "buildCombinedReview()<br/>(shared with Review, Phase 6)" --> Analysis
+    Document -- "server-side only, API key never leaves apps/api" --> AiProvider
+    Document -- "imports at compile+runtime" --> Types
+    Publish -- "buildCombinedReview() + generateDocument()<br/>(shared with Review/Document, Phase 7)" --> Analysis
+    Publish -- "server-side only, API key never leaves apps/api" --> AiProvider
+    Publish -- "server-side only, token never leaves apps/api" --> GH
+    Publish -- "imports at compile+runtime" --> Types
 ```
 
 - **`apps/web`** is a Vite dev server serving a React SPA. Its only real behavior is calling
   the API's health endpoint and rendering the result.
-- **`apps/api`** is a single Express process exposing three routes: `GET /api/health`, (Phase 3)
-  `POST /api/submissions`, and (Phase 5) `POST /api/submissions/:id/review`, all mounted under
-  `/api`.
+- **`apps/api`** is a single Express process exposing five routes: `GET /api/health`, (Phase 3)
+  `POST /api/submissions`, (Phase 5) `POST /api/submissions/:id/review`, (Phase 6)
+  `POST /api/submissions/:id/document`, and (Phase 7) `POST /api/submissions/:id/publish`, all
+  mounted under `/api`.
 - **`packages/shared`** is a plain TypeScript package (built to `dist/` with `tsc`) that
   `apps/web`, `apps/api`, and `apps/extension` all depend on via npm workspaces, so response
   and domain shapes — including the `POST /api/submissions` wire contract — are defined once
@@ -103,7 +117,8 @@ flowchart TB
   all 4 parameters, since that arity is how Express recognizes error-handling middleware).
 - Routes are organized under `src/routes/`, mounted at `/api` via `createApiRouter()` (a
   composition-root factory, not a module-level singleton — see below); `health.route.ts`,
-  (Phase 3) `submissions.route.ts`, and (Phase 5) `reviews.route.ts`.
+  (Phase 3) `submissions.route.ts`, (Phase 5) `reviews.route.ts`, (Phase 6)
+  `documents.route.ts`, and (Phase 7) `publish.route.ts`.
 - Every JSON response uses the shared `ApiResponse<T>` envelope (`{ success, data }` or
   `{ success: false, error }`) from `packages/shared`, so response shape is consistent and
   typed from the first endpoint onward — including every error path, via the centralized
@@ -147,37 +162,42 @@ flowchart LR
 - **`routes/index.ts`** — `createApiRouter()`, a small composition root: builds a fresh
   repository → service → controller → router on every call, so every `createApp()` instance
   (including every test's) gets its own isolated in-memory store. As of Phase 5, also
-  constructs the real `AiProvider` and `AiReviewService` here (see below).
+  constructs the real `AiProvider` and `AiReviewService` here; as of Phase 7, also constructs
+  the real `GitHubClient` and `GitHubPublishService` (see below).
 
 ### AI review layer (Phase 5 — `apps/api/src/ai/`)
 
 `POST /api/submissions/:id/review` combines a stored submission, Phase 4's deterministic
 analysis, and a new AI-generated review into one response — never merging the two analyses,
 always exposing where they disagree. Full detail, including the prompt design and hallucination
-mitigation strategy: [docs/ai-analysis.md](../ai-analysis.md).
+mitigation strategy: [docs/ai-analysis.md](ai-analysis.md).
 
 ```mermaid
 flowchart LR
     REQ["POST /api/submissions/:id/review"] --> CTRL["reviews.controller.ts"]
     CTRL -- "findById" --> REPO["SubmissionRepository<br/>(Phase 5: findById added)"]
-    CTRL -- "analyzeSolution()" --> PA["packages/analysis"]
-    CTRL --> SVC["AiReviewService<br/>ai/ai-review.service.ts"]
+    CTRL --> BUILD["buildCombinedReview()<br/>services/combined-review.service.ts<br/>(Phase 6: extracted, shared with /document)"]
+    BUILD -- "analyzeSolution()" --> PA["packages/analysis"]
+    BUILD --> SVC["AiReviewService<br/>ai/ai-review.service.ts"]
     SVC -- "buildReviewSystemPrompt()/<br/>buildReviewUserPrompt()" --> PROMPT["ai/prompts/reviewPrompt.ts"]
     SVC -- "generate()" --> PROV["AiProvider<br/>(interface)"]
-    PROV -. "real" .-> ANTHROPIC["anthropicProvider.ts<br/>→ Anthropic Messages API"]
+    PROV -. "real, via createProviderFromEnv.ts" .-> ANTHROPIC["anthropicProvider.ts<br/>→ Anthropic Messages API"]
+    PROV -. "real, via createProviderFromEnv.ts" .-> GEMINI["geminiProvider.ts<br/>→ Gemini generateContent API"]
     PROV -. "tests only" .-> MOCK["mockProvider.ts<br/>(excluded from the build)"]
     SVC -- "parse + solutionReviewSchema.safeParse" --> SVC
-    CTRL -- "compareAnalyses()" --> AGREE["ai/agreement.ts"]
-    CTRL -- "any AiReviewError" --> ERRMAP["toApiError()<br/>(in the controller)"]
+    BUILD -- "compareAnalyses()" --> AGREE["ai/agreement.ts"]
+    CTRL -- "any AiReviewError/MissingCodeError" --> ERRMAP["mapAiErrorToApiError()<br/>controllers/aiErrorMapping.ts<br/>(Phase 6: extracted, shared with /document)"]
     ERRMAP --> ERR["errorHandler<br/>(unchanged since Phase 3)"]
 ```
 
 - **`ai/providers/types.ts`** defines the one interface (`AiProvider`) `ai-review.service.ts`
   depends on — never a concrete provider class — mirroring how services already depend on
-  `SubmissionRepository`, not `InMemorySubmissionRepository` (Phase 3). `ai/providers/
-  anthropicProvider.ts` is the one real implementation (calls Anthropic's Messages API directly
-  over `fetch`, no SDK); `ai/providers/mockProvider.ts` is test/dev-only and is excluded from
-  the production build (`apps/api/tsconfig.build.json`).
+  `SubmissionRepository`, not `InMemorySubmissionRepository` (Phase 3). Two real
+  implementations exist: `ai/providers/anthropicProvider.ts` (calls Anthropic's Messages API
+  directly over `fetch`, no SDK) and `ai/providers/geminiProvider.ts` (calls Google's Gemini
+  `generateContent` API the same way); `ai/providers/createProviderFromEnv.ts` reads
+  `AI_PROVIDER` and constructs whichever one is selected. `ai/providers/mockProvider.ts` is
+  test/dev-only and is excluded from the production build (`apps/api/tsconfig.build.json`).
 - **`ai/prompts/reviewPrompt.ts`** is a dedicated prompt-building module — never a prompt string
   inlined in the controller — accepting only `{ problem, submission, deterministicAnalysis }`,
   which is what makes it structurally impossible to forward a submission's `id` or `metadata` to
@@ -190,11 +210,117 @@ flowchart LR
   "expose the disagreement rather than hiding it" requirement.
 - **`ai/errors.ts`** defines one error type, `AiReviewError`, covering every AI failure mode
   (timeout, provider error, rate limit, malformed response, schema validation) —
-  HTTP-agnostic; `controllers/reviews.controller.ts` is the one place that translates it to the
-  HTTP-facing `ApiError`.
+  HTTP-agnostic; `controllers/aiErrorMapping.ts`'s `mapAiErrorToApiError()` (Phase 6, extracted
+  from what was originally inlined in `reviews.controller.ts`) is the one place that translates
+  it — and `services/combined-review.service.ts`'s `MissingCodeError` — to the HTTP-facing
+  `ApiError`, shared by both `reviews.controller.ts` and `documents.controller.ts`.
 - **`ai/ai-review.service.ts`** is the orchestrator: builds the prompt, calls the injected
   provider (racing it against its own timeout as a defense-in-depth backstop), strips a
   markdown fence if the model added one anyway, parses JSON, and validates against the schema.
+
+### Document generation layer (Phase 6 — `apps/api/src/document/`)
+
+`POST /api/submissions/:id/document` turns the same `CombinedSolutionReview` the review
+endpoint produces (via the now-shared `buildCombinedReview()`) into a complete Markdown learning
+document — problem info, the exact submitted code, the AI's approach/patterns/complexity, both
+analyses' agreement or disagreement, a better-approach section when one exists, and more. Full
+detail, including the document schema, escaping rules, and filename strategy:
+[docs/document-generation.md](document-generation.md).
+
+```mermaid
+flowchart LR
+    REQ["POST /api/submissions/:id/document"] --> CTRL["documents.controller.ts"]
+    CTRL -- "findById" --> REPO["SubmissionRepository"]
+    CTRL -- "buildCombinedReview()" --> BUILD["combined-review.service.ts<br/>(shared with /review)"]
+    CTRL -- "generateDocument()" --> GEN["document/document-generator.ts"]
+    GEN --> TEMPLATES["templates/*"]
+    TEMPLATES --> MD["markdown/markdown.ts<br/>(escapeMarkdown, codeBlock, ...)"]
+    GEN -- "generateDocumentFilename()" --> FILE["formatter/filename.ts"]
+    CTRL -- "any error" --> ERRMAP["mapAiErrorToApiError()<br/>(same as /review)"]
+```
+
+- **`document/document-generator.ts`** is the one exported entry point — the only function
+  `documents.controller.ts` calls. Nothing outside `document/` builds Markdown, satisfying the
+  task's "do not generate Markdown inside controllers" requirement structurally: the controller
+  has no Markdown-building code available to it at all.
+- **`document/markdown/markdown.ts`** is the one place that knows Markdown syntax:
+  `heading()`, `bulletList()`, `blockquote()`, `codeBlock()` (dynamic fence-width selection so
+  code containing its own ` ``` ` sequence can't break out), and `escapeMarkdown()` (escapes
+  inline-significant characters and neutralizes leading block-structure markers — heading,
+  bullet, blockquote, ordered-list, setext underline — so arbitrary AI-generated or extracted
+  text can never inject document structure).
+- **`document/templates/`** holds one file per section group (problem info, solution, complexity,
+  review, learning), each built exclusively from `markdown/markdown.ts`'s primitives.
+- **`document/formatter/filename.ts`** generates a safe, defensively-sanitized filename
+  (`NNN-slug.md`) — collapses path-traversal-shaped input into ordinary hyphens rather than
+  trusting Phase 3's slug validation alone.
+- **`services/combined-review.service.ts`** (Phase 6, extracted from what Phase 5 originally
+  inlined in `reviews.controller.ts`) is now the single place that runs
+  `analyzeSolution()` → `AiReviewService.generateReview()` → `compareAnalyses()`, shared by
+  `reviews.controller.ts`, `documents.controller.ts`, and (Phase 7) `publish.controller.ts` so
+  none of the three can ever drift apart on how a `CombinedSolutionReview` is built.
+- **The submitted code path is deliberately escaping-free.** `document-generator.ts` passes
+  `submission.code` straight into `codeBlock()` with no call to `escapeMarkdown()` anywhere —
+  the task's "do not modify the user's code" requirement enforced structurally, not by
+  convention. The code is labeled **YOUR SOLUTION**; a populated "Better Approach" section's
+  code is labeled **RECOMMENDED SOLUTION** — the two are never presented as the same thing, and
+  the submitted code is never replaced.
+
+### GitHub publishing layer (Phase 7 — `apps/api/src/github/`)
+
+`POST /api/submissions/:id/publish` takes Phase 6's generated document and commits it to a
+GitHub repository — a per-problem `README.md`, a small `problems/index.json`, and an
+auto-maintained root `README.md` table — with explicit duplicate detection so a re-analyzed
+problem is never silently overwritten. Full detail, including the repository layout, commit
+process, and duplicate-handling contract: [docs/github-integration.md](github-integration.md).
+
+```mermaid
+flowchart LR
+    REQ["POST /api/submissions/:id/publish"] --> CTRL["publish.controller.ts"]
+    CTRL -- "findById" --> REPO["SubmissionRepository"]
+    CTRL -- "buildCombinedReview()" --> BUILD["combined-review.service.ts<br/>(shared with /review, /document)"]
+    CTRL -- "generateDocument()" --> GEN["document/document-generator.ts<br/>(Phase 6, unchanged)"]
+    CTRL -- "publish()" --> PUB["services/github-publish.service.ts"]
+    PUB -- "ensureAccessible()" --> RS["github/repository.service.ts"]
+    PUB -- "findExisting()/create()/update()" --> FS["github/file.service.ts"]
+    PUB -- "buildMessage()" --> CS["github/commit.service.ts"]
+    PUB -- "buildProblemRepoPath()" --> PP["github/problemPath.ts"]
+    PUB -- "mergeProblemsTableIntoReadme()" --> RT["github/readmeTable.ts"]
+    RS & FS --> CLIENT["GitHubClient<br/>(interface)"]
+    CLIENT -. "real, via createGitHubClientFromEnv.ts" .-> REAL["github-client.ts<br/>→ GitHub Contents API (Octokit)"]
+    CLIENT -. "tests only" .-> MOCK["mockGitHubClient.ts<br/>(excluded from the build)"]
+    CTRL -- "any error" --> ERRMAP["mapPublishErrorToApiError()<br/>(controllers/githubErrorMapping.ts)"]
+    ERRMAP --> ERR["errorHandler<br/>(unchanged since Phase 3)"]
+```
+
+- **`github/types.ts`** defines the one interface (`GitHubClient`) every service in `github/`
+  depends on — never a concrete Octokit type — the same dependency-inversion shape as
+  `ai/providers/types.ts`'s `AiProvider`. `github/github-client.ts` is the one real
+  implementation (the only file that imports `@octokit/rest`), and is a **synchronous** factory
+  like `createAnthropicProvider`/`createGeminiProvider`: it never eagerly fetches a token, so
+  the whole API still starts cleanly with no `GITHUB_TOKEN`/`GITHUB_REPO` configured.
+  `github/mockGitHubClient.ts` is test/dev-only and is excluded from the production build
+  (`apps/api/tsconfig.build.json`).
+- **`github/auth.ts`** defines `GitHubAuthProvider` (`getToken(): Promise<string>`), kept
+  separate from `GitHubClient` specifically so a future OAuth implementation is a new file
+  implementing the same interface, not a change to any request logic — see
+  [docs/github-integration.md#future-oauth-design](github-integration.md#future-oauth-design).
+  `createEnvTokenAuthProvider()` is the MVP implementation: a single token from `GITHUB_TOKEN`.
+- **`services/github-publish.service.ts`** is the orchestrator — the one place that spans
+  `github/` and Phase 6's `document/` together, mirroring `combined-review.service.ts`'s role.
+  Enforces the create/update duplicate-handling contract (never a silent accidental overwrite —
+  see [docs/github-integration.md#duplicate-handling](github-integration.md#duplicate-handling)),
+  then keeps `problems/index.json` and the root README's table in sync, skipping any write whose
+  content would be unchanged.
+- **`github/readmeTable.ts`** renders the root README's table and merges it into any existing
+  README between `<!-- codereviewai:problems-table:start/end -->` markers — replacing only what's
+  between them, never anything else, per the task's "do not destroy manually written sections"
+  requirement. Uses two primitives added to `document/markdown/markdown.ts` in this phase
+  (`table()`, `tableCell()`), reusing Phase 6's `escapeMarkdown()` rather than duplicating
+  escaping logic.
+- **`github/commit.service.ts`** is the one place commit-message text is decided — every write
+  gets a `docs:`-prefixed, problem-specific message (e.g. `"docs: add analysis for Two Sum"`),
+  never a generic one, satisfying the task's "create meaningful commits" requirement.
 
 ## Chrome extension (`apps/extension`)
 
@@ -350,16 +476,17 @@ anywhere in it.
   staying app-internal because more than one app needs the exact same contract, and a single
   source of truth is what keeps them from drifting apart.
 
-## Future GitHub layer (not implemented)
+## Future: OAuth-based GitHub authentication (not implemented)
 
-Planned to live inside `apps/api` as a new module (e.g. `src/github/`) that:
-
-1. Renders an analysis result into a Markdown learning document.
-2. Authenticates to GitHub using a server-side credential (`GITHUB_TOKEN` /
-   `GITHUB_REPO`, already documented as placeholders in `.env.example`).
-3. Creates or updates a file in the configured repository via the GitHub REST API.
-
-Like the AI review layer, the GitHub credential will stay server-side only.
+GitHub publishing itself (Phase 7, above) is done — token-based auth, repository lookup,
+duplicate detection, and commits all work today via `GITHUB_TOKEN`. What remains is swapping
+that single, manually-issued personal access token for a proper OAuth flow (a user authorizes a
+GitHub App or OAuth App from within the product, rather than pasting a token into `.env`) —
+planned for whenever the project adds user accounts (Phase 9+). `github/auth.ts`'s
+`GitHubAuthProvider` interface was built specifically to make this a new implementation of that
+interface, not a change to `github-client.ts` or anything above it — see
+[docs/github-integration.md#future-oauth-design](github-integration.md#future-oauth-design)
+for a concrete sketch of what that implementation would look like.
 
 ## Data flow
 
@@ -379,49 +506,86 @@ leetcode.com/problems/<slug> → content script → popup ("Submit Solution")
 
 POST /api/submissions/:id/review
   → reviews.controller.ts: repository.findById(id) (404 if missing)
-  → analyzeSolution() (packages/analysis) → SolutionAnalysis, recomputed fresh
-  → AiReviewService.generateReview() → prompt → AiProvider → validated SolutionReview
-  → compareAnalyses(deterministic, ai) → ReviewAgreement
+  → buildCombinedReview(): analyzeSolution() (packages/analysis) → SolutionAnalysis, recomputed fresh
+                          → AiReviewService.generateReview() → prompt → AiProvider → validated SolutionReview
+                          → compareAnalyses(deterministic, ai) → ReviewAgreement
   → 200 CombinedSolutionReview JSON { deterministic, ai, agreement, generatedAt }
+
+POST /api/submissions/:id/document
+  → documents.controller.ts: repository.findById(id) (404 if missing)
+  → buildCombinedReview() (same helper as /review, above)
+  → generateDocument({ problem, submission, review }) → templates/* → markdown/*
+  → 200 GeneratedDocument JSON { filename, content }
+
+POST /api/submissions/:id/publish
+  → publish.controller.ts: repository.findById(id) (404 if missing)
+  → buildCombinedReview() + generateDocument() (identical to /document, above)
+  → GitHubPublishService.publish():
+       repository.service.ts: ensureAccessible() (repository lookup)
+       file.service.ts: findExisting(problemPath) (duplicate detection)
+       → create()/update() the problem README (commit 1)
+       → upsert problems/index.json (commit 2)
+       → re-render + merge the root README table (commit 3)
+  → 200 PublishResult JSON { status, path, commitUrl, index, readme }
 ```
 
-`packages/analysis`'s `analyzeSolution()` is called from two places now: indirectly by nothing
-in Phase 4 (it was standalone then), and directly by `reviews.controller.ts` as of Phase 5 —
-see [docs/ai-analysis.md](../ai-analysis.md) for the full AI review pipeline.
+`packages/analysis`'s `analyzeSolution()` is called from one place now — `buildCombinedReview()`
+(`services/combined-review.service.ts`), shared by all three endpoints above since Phase 6
+extracted it out of `reviews.controller.ts` — see [docs/ai-analysis.md](ai-analysis.md) for
+the full AI review pipeline, [docs/document-generation.md](document-generation.md) for the
+document pipeline, and [docs/github-integration.md](github-integration.md) for the publish
+pipeline.
 
 **Planned, once all phases are built:**
 
 ```
-LeetCode page → apps/extension → apps/api → AI review layer → Markdown document → GitHub API
+LeetCode page → apps/extension → apps/api → AI review → Markdown document → GitHub API
                                      ↓
                                 apps/web dashboard (reads stored submissions/documents)
 ```
 
-Nothing outside `apps/api` calls `POST /api/submissions/:id/review` yet — the extension and web
-frontend have no UI for triggering a review. Document generation (rendering a
-`CombinedSolutionReview` into Markdown) and the GitHub layer below remain the two pieces that
-turn this into the fully automated pipeline the project is ultimately building toward.
+Every step in that line is now implemented end-to-end (Phases 3–7) — what's still missing is
+what triggers it: nothing outside `apps/api` calls `POST /api/submissions/:id/review`,
+`.../document`, or `.../publish` yet, since the extension and web frontend have no UI for
+triggering any of them. A web dashboard reading stored submissions/reviews/documents back also
+needs real persistence first (`InMemorySubmissionRepository` doesn't survive a restart) — see the
+README's [Known Limitations](../README.md#27-known-limitations) and roadmap for what's still
+unscheduled.
 
 ## Security boundaries
 
 - **Client-side code never holds secrets.** `apps/web` and `apps/extension` ship to the
   browser; any credential (AI provider key, GitHub token) must live only in `apps/api`'s
   environment, never in frontend/extension bundles or source. As of Phase 5 this is a real,
-  verified property, not just a stated intention: `AI_PROVIDER_API_KEY` is read exactly once,
-  server-side, in `routes/index.ts` when constructing the real Anthropic provider — no HTTP
-  response ever includes it, and neither `apps/web` nor `apps/extension` has any code path that
-  could read it.
+  verified property for the AI provider key, not just a stated intention: `AI_PROVIDER_API_KEY`
+  is read exactly once, server-side, in `ai/providers/createProviderFromEnv.ts` (called from
+  `routes/index.ts`) when constructing the real provider (Anthropic or Gemini, per
+  `AI_PROVIDER`) — no HTTP response ever includes it, and neither `apps/web` nor
+  `apps/extension` has any code path that could read it.
+- **The GitHub token gets the same verified treatment, as of Phase 7.** `GITHUB_TOKEN` is read
+  exactly once, server-side, in `github/auth.ts`'s `createEnvTokenAuthProvider()` (constructed
+  by `github/createGitHubClientFromEnv.ts`, called from `routes/index.ts`) — never hardcoded,
+  never logged, never included in any HTTP response (`PublishResult` carries a `commitUrl`, not
+  the token), and unreachable from `apps/web`/`apps/extension`. See
+  [docs/github-integration.md#authentication-and-token-handling](github-integration.md#authentication-and-token-handling).
 - **The AI request contains exactly what's needed to review the code, and nothing else.**
   `ai/prompts/reviewPrompt.ts`'s input type accepts only `{ problem, submission,
   deterministicAnalysis }` — the submission's `id`, `metadata.receivedAt`, `metadata.extractedAt`,
   and `metadata.source` are never sent to the AI provider, since none of them would improve the
-  review. See [docs/ai-analysis.md#privacy](../ai-analysis.md#privacy).
+  review. See [docs/ai-analysis.md#privacy](ai-analysis.md#privacy).
 - **AI output is untrusted, exactly like client input is.** A raw AI response is not treated as
   ground truth anywhere in the system: it must pass `solutionReviewSchema` (Zod) before it's
   used, and its complexity/pattern claims are explicitly compared against — not blindly
   substituted for — Phase 4's independently-computed deterministic analysis. See
-  [docs/ai-analysis.md](../ai-analysis.md) for the full validation and hallucination-mitigation
+  [docs/ai-analysis.md](ai-analysis.md) for the full validation and hallucination-mitigation
   strategy.
+- **Generated documents can't be used to inject Markdown structure.** Every piece of dynamic
+  prose embedded in a Phase 6 document (problem descriptions, every AI-generated string) is run
+  through `document/markdown/markdown.ts`'s `escapeMarkdown()`, which neutralizes leading
+  heading/list/blockquote/code-fence markers and escapes inline-significant characters — an AI
+  response or extracted problem description can never inject a rogue heading, list item, or
+  break out of a fenced code block. See
+  [docs/document-generation.md#escaping](document-generation.md#escaping).
 - **CORS is restricted**, not wide open — `apps/api` only accepts requests from the origin in
   `CORS_ORIGIN` (defaults to the local Vite dev server).
 - **The extension requests least privilege.** Its content-script page access comes entirely
@@ -451,9 +615,17 @@ turn this into the fully automated pipeline the project is ultimately building t
   regex/text heuristic over the source string, never an `eval`, a sandboxed execution, or
   anything that runs submitted code. The Phase 5 AI review layer sends the code as text in a
   prompt and receives text back — it never executes it either, and this system has no sandbox
-  or code-execution capability anywhere in it.
+  or code-execution capability anywhere in it. Phase 6's document generator embeds that same
+  code, byte-for-byte, inside a Markdown fence — displayed, never executed or evaluated by
+  anything in this codebase.
 - **`.env` files are never committed** — `.gitignore` excludes all `.env*` files, and
   `.env.example` documents variable *names* only, with no real values.
-- **Future GitHub writes are scoped and explicit.** The GitHub integration (Phase 7) will
-  write only to a repository the user explicitly configures, not an arbitrary or inferred
-  location.
+- **GitHub writes are scoped and explicit, as of Phase 7.** `GITHUB_REPO` names exactly one
+  repository the user explicitly configures — never an arbitrary or inferred location — and
+  every write goes through `github/problemPath.ts`'s sanitized path-building, which collapses
+  path-traversal-shaped input (`../`, `/`, `\`) into ordinary hyphens the same way Phase 6's
+  filename generator does, so a malformed slug can never write outside `problems/`.
+- **A duplicate is never silently overwritten.** `GitHubPublishService` rejects a `"create"`-mode
+  publish against a problem that already exists (`409 GITHUB_CONFLICT`) rather than overwriting
+  it — an intentional overwrite requires the caller to explicitly pass `mode: "update"`. See
+  [docs/github-integration.md#duplicate-handling](github-integration.md#duplicate-handling).

@@ -31,6 +31,8 @@ describe('solutionReviewSchema', () => {
     const payload = validPayload();
     payload.betterApproach = {
       description: 'Sort then two-pointer scan.',
+      pseudocode: '1. Sort the array.\n2. Walk pointers inward until the sum matches.',
+      code: 'function twoSumSorted(nums, target) { /* ... */ }',
       complexity: { time: 'O(n log n)', space: 'O(1)' },
       whyBetter: 'Uses constant extra space instead of a hash map.',
     };
@@ -91,12 +93,32 @@ describe('solutionReviewSchema', () => {
     const payload = validPayload();
     payload.betterApproach = {
       description: 'desc',
+      pseudocode: 'step 1\nstep 2',
+      code: 'function f() {}',
       complexity: { time: 'O(n)', space: 'O(1)' },
-    } as unknown as {
-      description: string;
-      complexity: { time: string; space: string };
-      whyBetter: string;
-    };
+    } as unknown as SolutionReview['betterApproach'];
+    expect(solutionReviewSchema.safeParse(payload).success).toBe(false);
+  });
+
+  it('rejects a betterApproach missing pseudocode', () => {
+    const payload = validPayload();
+    payload.betterApproach = {
+      description: 'desc',
+      code: 'function f() {}',
+      complexity: { time: 'O(n)', space: 'O(1)' },
+      whyBetter: 'because',
+    } as unknown as SolutionReview['betterApproach'];
+    expect(solutionReviewSchema.safeParse(payload).success).toBe(false);
+  });
+
+  it('rejects a betterApproach missing code', () => {
+    const payload = validPayload();
+    payload.betterApproach = {
+      description: 'desc',
+      pseudocode: 'step 1\nstep 2',
+      complexity: { time: 'O(n)', space: 'O(1)' },
+      whyBetter: 'because',
+    } as unknown as SolutionReview['betterApproach'];
     expect(solutionReviewSchema.safeParse(payload).success).toBe(false);
   });
 

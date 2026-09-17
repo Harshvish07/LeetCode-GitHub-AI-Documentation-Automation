@@ -48,7 +48,7 @@ export function buildReviewSystemPrompt(): string {
     '- correctnessConcerns (string[]): specific correctness risks or bugs you see, if any (empty array if none).',
     '- edgeCases (string[]): edge cases the submission may not handle correctly (empty array if none apparent).',
     '- optimality (object): { isOptimal: boolean, reasoning: string } — is this solution asymptotically optimal for the problem, and why.',
-    '- betterApproach (object or null): null if the submission is already optimal; otherwise { description: string, complexity: { time: string, space: string }, whyBetter: string }.',
+    '- betterApproach (object or null): null if the submission is already optimal; otherwise { description: string, pseudocode: string, code: string, complexity: { time: string, space: string }, whyBetter: string }. `pseudocode` is a short, language-agnostic step-by-step outline. `code` is a working implementation in the submission’s own language (or a common language if unknown) — plain code text, no markdown fences.',
     '- alternativeApproaches (string[]): other valid approaches worth knowing, even if not strictly better (empty array if none worth mentioning).',
     '- learningPoints (string[]): at least one concrete thing the candidate should take away from this problem.',
     '- relatedPatterns (string[]): related DSA patterns worth practicing next.',

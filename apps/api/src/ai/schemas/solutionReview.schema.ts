@@ -18,6 +18,10 @@ const complexitySchema = z.object({
 const betterApproachSchema = z
   .object({
     description: z.string().trim().min(1),
+    /** Short, language-agnostic step-by-step outline — used by Phase 6's document generator's "Better Approach" section. */
+    pseudocode: z.string().trim().min(1),
+    /** A working implementation, ideally in the submission's own language — used the same way. */
+    code: z.string().trim().min(1),
     complexity: complexitySchema,
     whyBetter: z.string().trim().min(1),
   })

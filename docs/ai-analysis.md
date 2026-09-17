@@ -13,9 +13,11 @@ apps/api/src/ai/
 ├── prompts/
 │   └── reviewPrompt.ts       Builds the system + user prompt from problem/submission/analysis
 ├── providers/
-│   ├── types.ts                The AiProvider interface — the only thing the service depends on
-│   ├── anthropicProvider.ts     The one real implementation (calls Anthropic's Messages API)
-│   └── mockProvider.ts           Test/dev-only fakes — never wired into the real app
+│   ├── types.ts                     The AiProvider interface — the only thing the service depends on
+│   ├── anthropicProvider.ts          Real implementation calling Anthropic's Messages API
+│   ├── geminiProvider.ts             Real implementation calling Google's Gemini generateContent API
+│   ├── createProviderFromEnv.ts      Picks anthropic|gemini from AI_PROVIDER and configures it
+│   └── mockProvider.ts               Test/dev-only fakes — never wired into the real app
 ├── schemas/
 │   └── solutionReview.schema.ts  The Zod schema every AI response must pass before it's trusted
 ├── agreement.ts                Compares deterministic vs AI complexity/pattern claims
@@ -34,12 +36,16 @@ the one place that wires it to HTTP: it loads a stored submission, runs Phase 4'
 
 `AiReviewService` depends on the `AiProvider` interface (`providers/types.ts`) — a single
 `generate({ systemPrompt, userPrompt, maxOutputTokens, timeoutMs }) → { text }` method — never on
-a concrete provider class. `providers/anthropicProvider.ts` is the one real implementation today,
-calling Anthropic's Messages API directly over `fetch` (no SDK dependency for one HTTP call). A
-different vendor, or a second provider used for A/B testing, would be a new file implementing the
-same interface; nothing in the prompt layer, the schema, the service, or the controller would
-need to change. This is deliberately the same dependency-inversion shape Phase 3 used for
-`SubmissionRepository` (services depend on an interface, never a concrete class).
+a concrete provider class. Two real implementations exist: `providers/anthropicProvider.ts`
+(Anthropic's Messages API) and `providers/geminiProvider.ts` (Google's Gemini `generateContent`
+API), both calling their vendor's HTTP API directly over `fetch` (no SDK dependency for one HTTP
+call each). `providers/createProviderFromEnv.ts` is the single place that reads `AI_PROVIDER`
+(`"anthropic"` | `"gemini"`, defaulting to `"anthropic"`) and `AI_PROVIDER_API_KEY`/
+`AI_PROVIDER_MODEL` and constructs the selected one — nothing else in `ai/` ever branches on which
+vendor is active. Adding a third vendor is a new file implementing the same interface plus one
+more `case` in `createProviderFromEnv.ts`; nothing in the prompt layer, the schema, the service,
+or the controller would need to change. This is deliberately the same dependency-inversion shape
+Phase 3 used for `SubmissionRepository` (services depend on an interface, never a concrete class).
 
 `providers/mockProvider.ts` exists purely for tests (`createFixedMockProvider`,
 `createFailingMockProvider`, `createMockProvider`) and is explicitly excluded from the production
@@ -186,14 +192,20 @@ internally consistent and schema-valid. Structured-output validation guarantees 
 - **Pattern-name agreement is also string-based** (case-insensitive exact match after
   trimming) — the AI saying "Hashing" when the deterministic engine says "Hash Map" would be
   reported as a disagreement even though a human would consider them the same idea.
-- **The real Anthropic provider was never exercised against the live API in this environment.**
-  No real, billed API call was made anywhere during this phase's development or verification —
-  every test uses a mocked provider (`providers/mockProvider.ts` or a mocked `fetch`), per the
-  task's explicit requirement. `providers/anthropicProvider.ts`'s request-building and
-  response-parsing logic is thoroughly unit-tested against a mocked `fetch`, but has not been
-  confirmed against Anthropic's actual, live response format. This is the same category of
-  honesty disclosure as Phase 2's "selectors were never verified against the live LeetCode
-  site."
+- **The real Anthropic provider was never exercised against the live API in this environment** —
+  no Anthropic API key has been available here, so `providers/anthropicProvider.ts`'s
+  request-building and response-parsing logic is thoroughly unit-tested against a mocked
+  `fetch`, but has not been confirmed against Anthropic's actual, live response format. This is
+  the same category of honesty disclosure as Phase 2's "selectors were never verified against
+  the live LeetCode site."
+- **The Gemini provider *was* exercised against the live API once, manually, outside the
+  automated test suite** — a real `POST /api/submissions/:id/review` call against
+  `AI_PROVIDER=gemini` with a real key returned a well-formed, schema-valid review, including a
+  genuine deterministic-vs-AI pattern disagreement (`hasDisagreement: true`) surfaced correctly
+  rather than hidden. This confirms `providers/geminiProvider.ts`'s request/response parsing
+  against the real Gemini response shape, but it was one ad hoc manual check, not a repeatable
+  or automated one — every test in the suite (including `geminiProvider.test.ts`) still uses a
+  mocked `fetch`, per the task's explicit requirement never to make real AI calls in tests.
 - **No retry logic.** A `RATE_LIMITED` or transient `PROVIDER_ERROR` surfaces immediately as an
   API error rather than being retried with backoff — a reasonable next improvement, not
   implemented this phase.
@@ -215,11 +227,11 @@ internally consistent and schema-valid. Structured-output validation guarantees 
   discipline of only forwarding exactly what's needed is deliberate scaffolding for that future
   phase, not a response to a current, real risk.
 - **The API key never reaches the browser, the extension, or the frontend.** `AI_PROVIDER_API_KEY`
-  is read once, server-side, in `routes/index.ts` when constructing the real provider
-  (`createAnthropicProvider`) — it is never included in any HTTP response, never serialized into
-  `CombinedSolutionReview`, and nothing in `apps/web` or `apps/extension` has any code path that
-  could read it (neither app has network access to the provider, nor to the API's environment
-  variables).
+  is read once, server-side, in `providers/createProviderFromEnv.ts` (called from
+  `routes/index.ts`) when constructing whichever real provider is selected — it is never
+  included in any HTTP response, never serialized into `CombinedSolutionReview`, and nothing in
+  `apps/web` or `apps/extension` has any code path that could read it (neither app has network
+  access to the provider, nor to the API's environment variables).
 
 ## Cost considerations
 
@@ -233,5 +245,8 @@ internally consistent and schema-valid. Structured-output validation guarantees 
   exactly one provider call per endpoint call — but also means a flaky failure isn't
   automatically retried, and repeated review requests for the same submission are not
   deduplicated. Both would be reasonable, cost-relevant additions for a later phase.
-- **The model is configurable** (`AI_PROVIDER_MODEL`, defaulting to `claude-sonnet-5`) without
-  a code change, so a deployment can trade cost against review quality by env var alone.
+- **The vendor and model are both configurable by env var alone** — `AI_PROVIDER`
+  (`"anthropic"` | `"gemini"`, defaulting to `"anthropic"`) picks the vendor, and
+  `AI_PROVIDER_MODEL` picks the model within it (defaulting to `claude-sonnet-5` for Anthropic
+  or `gemini-3.6-flash` for Gemini) — no code change needed to trade cost against review
+  quality, or to switch vendors entirely.

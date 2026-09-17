@@ -457,6 +457,29 @@ retry logic, no caching). Specific to this phase's scope:
   `CombinedSolutionReview` — a future phase could add it back in alongside the AI review for a
   single combined "what to check first" list spanning both analyses.
 
+## Addendum: second provider added (Gemini)
+
+Everything above describes Phase 5 as originally scoped and delivered (Anthropic-only). Shortly
+after, a second `AiProvider` implementation was added on top of the same abstraction:
+
+- **`ai/providers/geminiProvider.ts`** — calls Google's Gemini `generateContent` API directly
+  over `fetch` (same no-SDK approach as `anthropicProvider.ts`), sending the API key via the
+  `x-goog-api-key` header (never in the URL). Covered by `geminiProvider.test.ts` (11 tests,
+  all against a mocked `fetch`, mirroring `anthropicProvider.test.ts`'s structure).
+- **`ai/providers/createProviderFromEnv.ts`** — the single place that reads the new
+  `AI_PROVIDER` env var (`"anthropic"` | `"gemini"`, defaulting to `"anthropic"`) and constructs
+  the selected provider; `routes/index.ts` now calls this instead of constructing
+  `anthropicProvider` directly. Covered by `createProviderFromEnv.test.ts` (5 tests).
+- Unlike the Anthropic provider, **the Gemini provider was exercised once, manually, against
+  the live API** — a real `POST /api/submissions/:id/review` call with `AI_PROVIDER=gemini` and
+  a real key returned a well-formed, schema-valid `SolutionReview`, and the response correctly
+  produced a genuine surfaced disagreement (`patternsOnlyInAi: ["Brute Force"]`,
+  `hasDisagreement: true`) rather than hiding it — a live confirmation of this phase's central
+  requirement. This was one ad hoc check outside the automated suite, not a repeatable one; see
+  [docs/ai-analysis.md#limitations](../ai-analysis.md#limitations).
+- No other file in `ai/` changed — `ai-review.service.ts`, `agreement.ts`, the schema, and the
+  prompt builder are all provider-agnostic by construction, exactly as Phase 5's design intended.
+
 ## What Phase 6 Will Implement
 
 Per the roadmap in the README, Phase 6 introduces learning-document generation (rendering a

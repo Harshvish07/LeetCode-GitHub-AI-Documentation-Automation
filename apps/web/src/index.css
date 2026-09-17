@@ -33,5 +33,6 @@ body {
   border: 1px solid #ddd;
   border-radius: 8px;
   background: white;
+  color: black;
   text-align: left;
 }

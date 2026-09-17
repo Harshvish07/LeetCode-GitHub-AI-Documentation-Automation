@@ -36,7 +36,7 @@ export function App() {
 
   return (
     <main className="page">
-      <h1>CodeReviewAI</h1>
+      <h1 style={{color: 'black'}}>CodeReviewAI</h1>
       <p className="tagline">AI-Powered LeetCode Solution Analyzer</p>
 
       <section className="status-card">

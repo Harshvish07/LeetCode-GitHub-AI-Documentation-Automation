@@ -8,9 +8,15 @@
 - No database, Docker, or other services are required — everything runs with plain `node`/`npm`
   (submissions are stored in-memory by the API process; see
   [docs/phases/phase-03.md](phases/phase-03.md#limitations)).
-- An Anthropic API key (`AI_PROVIDER_API_KEY`) is needed **only** to actually call
-  `POST /api/submissions/:id/review` — every other command, endpoint, and test in this guide
-  works with no key configured at all. See [docs/ai-analysis.md](ai-analysis.md).
+- An AI provider API key (`AI_PROVIDER_API_KEY` — Anthropic or Gemini, selected by
+  `AI_PROVIDER`) is needed **only** to actually call `POST /api/submissions/:id/review`,
+  `POST /api/submissions/:id/document`, or `POST /api/submissions/:id/publish` — every other
+  command, endpoint, and test in this guide works with no key configured at all. See
+  [docs/ai-analysis.md](ai-analysis.md) and [docs/document-generation.md](document-generation.md).
+- A GitHub personal access token (`GITHUB_TOKEN`) and a target repository (`GITHUB_REPO`, as
+  `"owner/repo"`) are needed **only** to actually call `POST /api/submissions/:id/publish` —
+  every other command, endpoint, and test works with no GitHub configuration at all. See
+  [docs/github-integration.md](github-integration.md).
 
 ## Installation
 
@@ -94,6 +100,15 @@ npm run test:watch -w @codereviewai/api      # one workspace, watch mode
   provider request/response mapping, the orchestrating service, and the deterministic-vs-AI
   agreement comparison) — **every AI-facing test uses a mocked provider
   (`ai/providers/mockProvider.ts`) or a mocked `fetch`; nothing ever calls a real AI API.**
+  `POST /api/submissions/:id/document` (Phase 6) reuses the same mocked-provider discipline,
+  plus the whole `document/` module in isolation (Markdown-primitive escaping/fencing, filename
+  sanitization, and full document generation — required sections, exact code preservation,
+  special-character handling, and missing-field fallbacks). `POST /api/submissions/:id/publish`
+  (Phase 7) reuses both, plus the whole `github/` module in isolation (repository lookup, file
+  create/update, duplicate detection, commit-message generation, and every GitHub API failure
+  mode) — **every GitHub-facing test uses a mocked `GitHubClient`
+  (`github/mockGitHubClient.ts`) or an injected mock `fetch`; nothing ever calls the real GitHub
+  API.**
 - `apps/web` tests use **React Testing Library** with Vitest's `jsdom` environment; `fetch` is
   stubbed per-test with `vi.stubGlobal` so no real network call happens.
 - `apps/extension` tests use `jsdom`'s `JSDOM` class directly for DOM-dependent extraction
@@ -137,8 +152,8 @@ Produces:
 - `packages/analysis/dist` — compiled JS + `.d.ts` declarations for the deterministic analysis
   engine (Phase 4).
 - `apps/api/dist` — compiled JS (via `tsc -p tsconfig.build.json`, which excludes `*.test.ts`
-  files, as well as `src/ai/providers/mockProvider.ts` — a test/dev-only fake AI provider that
-  must never ship — so none of them end up in the shipped output).
+  files, as well as `src/ai/providers/mockProvider.ts` and `src/github/mockGitHubClient.ts` —
+  test/dev-only fakes that must never ship — so none of them end up in the shipped output).
 - `apps/web/dist` — static production build (`tsc --noEmit` for a final type-check, then
   `vite build`).
 - `apps/extension/dist` — bundled `background.js`, `popup/popup.js`, `content/leetcode.js`,
@@ -152,10 +167,18 @@ To run the built API standalone: `npm run start -w @codereviewai/api` (runs
 - **`Cannot find module '@codereviewai/shared'` or `'@codereviewai/analysis'`** —
   `packages/shared/dist` or `packages/analysis/dist` is missing or stale. Run
   `npm run build:packages` from the root (builds both).
-- **`POST /api/submissions/:id/review` returns `502 AI_PROVIDER_ERROR`** — most likely
-  `AI_PROVIDER_API_KEY` isn't set in your environment. This is expected in local dev without a
-  key; every other endpoint works normally. See [docs/ai-analysis.md](ai-analysis.md) and
-  [docs/api.md](api.md#post-apisubmissionsidreview).
+- **`POST /api/submissions/:id/review`, `.../document`, or `.../publish` returns
+  `502 AI_PROVIDER_ERROR`** — most likely `AI_PROVIDER_API_KEY` isn't set in your environment
+  (all three endpoints share the same underlying AI call, via `buildCombinedReview()`). This is
+  expected in local dev without a key; every other endpoint works normally. See
+  [docs/ai-analysis.md](ai-analysis.md), [docs/document-generation.md](document-generation.md),
+  and [docs/api.md](api.md#post-apisubmissionsidreview).
+- **`POST /api/submissions/:id/publish` returns `502 GITHUB_AUTH_FAILED`** — most likely
+  `GITHUB_TOKEN` or `GITHUB_REPO` isn't set (or `GITHUB_REPO` isn't in `"owner/repo"` form) in
+  your environment. This is expected in local dev without GitHub configured; every other
+  endpoint, including `/review` and `/document`, works normally. See
+  [docs/github-integration.md](github-integration.md) and
+  [docs/api.md](api.md#post-apisubmissionsidpublish).
 - **`tsc` reports `rootDir` errors mentioning files in `packages/shared/src`** — this means a
   workspace's `tsconfig.json` is trying to type-check shared's raw source instead of resolving
   it as a compiled package; don't add a `paths` override pointing at `packages/shared/src` in
