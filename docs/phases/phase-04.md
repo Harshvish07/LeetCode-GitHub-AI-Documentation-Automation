@@ -78,7 +78,7 @@ there's no shared mutable state, no class hierarchy, and no sub-analyzer calls a
 except through `solution-analyzer.ts`, which computes the shared primitives once and passes them
 down. Interfaces (`Signal`, `PatternRule`, `SubmissionRepository`-style dependency shapes) are
 used specifically so a new pattern rule or a whole new analyzer module can be added later without
-changing this shape — see [Extending this later](#extending-this-later).
+changing this shape.
 
 ### A deliberate deviation from the task's example tree
 

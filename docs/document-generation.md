@@ -31,6 +31,15 @@ Every generated document has exactly these sections, in this order:
 18. `## Personal Review` — a templated closing summary (optimality verdict, top takeaway, both confidence levels, and a disagreement note if applicable)
 19. A footer with the generation timestamp and submission id
 
+**Optional sections (Phase 9).** Between Personal Review and the footer, the document may also contain
+`## Submission History` (a table of every attempt up to and including this one), `## How My Solution
+Improved` (the attempt-to-attempt story), and `## Recurring Mistakes` (weaknesses the stored history
+supports). They appear only when `generateDocument()` is given `history` (two or more attempts)
+or `recurringMistakes` (at least one) — which the document and publish endpoints do only with a
+database configured, best-effort. Without them the document is exactly the 19 parts above. Every
+value comes from stored data and is escaped like all other dynamic text; the user's code is untouched.
+See [docs/improvement-engine.md](improvement-engine.md#document-sections).
+
 This maps directly onto the task's required structure. Two sections — **Interview Explanation**
 and **Personal Review** — are *not* new AI-generated fields; they're composed from fields the AI
 review (Phase 5) already produces (`userApproach`, `whyItWorks`, `complexity`, `optimality`,

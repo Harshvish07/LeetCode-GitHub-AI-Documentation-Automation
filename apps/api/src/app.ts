@@ -2,6 +2,7 @@ import cors from 'cors';
 import express, { type Express } from 'express';
 import type { AiProvider } from './ai/providers/types.js';
 import type { GitHubClient } from './github/types.js';
+import type { Database } from './persistence/database.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { requestLogger } from './middleware/requestLogger.js';
 import { createApiRouter } from './routes/index.js';
@@ -12,6 +13,10 @@ export interface AppConfig {
   aiProvider?: AiProvider;
   /** Test-only override — see routes/index.ts's ApiRouterDeps for why this exists and why production never passes it. */
   githubClient?: GitHubClient;
+  /** See routes/index.ts's ApiRouterDeps.database. */
+  database?: Database;
+  /** Test-only: pins "today" for streak calculations. */
+  now?: () => Date;
 }
 
 export function createApp(config: AppConfig): Express {
@@ -22,7 +27,12 @@ export function createApp(config: AppConfig): Express {
   app.use(express.json());
   app.use(
     '/api',
-    createApiRouter({ aiProvider: config.aiProvider, githubClient: config.githubClient }),
+    createApiRouter({
+      aiProvider: config.aiProvider,
+      githubClient: config.githubClient,
+      database: config.database,
+      now: config.now,
+    }),
   );
 
   // Must come after every route: a 404 for anything unmatched, then the

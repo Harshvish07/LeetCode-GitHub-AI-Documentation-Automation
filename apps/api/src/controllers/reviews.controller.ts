@@ -3,6 +3,7 @@ import type { NextFunction, Request, Response } from 'express';
 import type { AiReviewService } from '../ai/ai-review.service.js';
 import type { CombinedSolutionReview } from '../ai/types.js';
 import type { SubmissionService } from '../services/submissions.service.js';
+import type { LearningRecorder } from '../persistence/learningRepository.js';
 import { buildCombinedReview } from '../services/combined-review.service.js';
 import { NotFoundError } from '../types/errors.js';
 import { mapAiErrorToApiError } from './aiErrorMapping.js';
@@ -10,6 +11,7 @@ import { mapAiErrorToApiError } from './aiErrorMapping.js';
 export interface ReviewsControllerDeps {
   submissionService: SubmissionService;
   reviewService: AiReviewService;
+  recorder?: LearningRecorder;
 }
 
 /**
@@ -28,7 +30,7 @@ export function createReviewsController(deps: ReviewsControllerDeps) {
           return;
         }
 
-        const combined = await buildCombinedReview(submission, deps.reviewService);
+        const combined = await buildCombinedReview(submission, deps.reviewService, deps.recorder);
 
         const body: ApiResponse<CombinedSolutionReview> = success(combined);
         res.status(200).json(body);

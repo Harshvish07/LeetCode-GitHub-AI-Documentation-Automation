@@ -50,9 +50,9 @@ None — this endpoint cannot fail short of the process being down entirely.
 ## `POST /api/submissions`
 
 **Purpose:** receives a captured LeetCode problem + submission from the Chrome extension,
-validates it, normalizes it, assigns it a server-side id, and stores it (in-memory — see
-[docs/phases/phase-03.md](phases/phase-03.md#limitations) for what that means today). Introduced
-in Phase 3.
+validates it, normalizes it, assigns it a server-side id, and stores it — in PostgreSQL when
+`DATABASE_URL` is set (Phase 8, see [docs/database.md](database.md)), otherwise in memory and lost on
+restart (see [docs/phases/phase-03.md](phases/phase-03.md#limitations)). Introduced in Phase 3.
 
 ### Request
 
@@ -371,6 +371,7 @@ overwrites an existing one and is **rejected** if nothing exists yet. See
 interface PublishResult {
   status: 'created' | 'updated' | 'unchanged';
   path: string; // e.g. "problems/001-two-sum/README.md"
+  documentUrl: string; // browsable link, e.g. https://github.com/owner/repo/blob/main/problems/001-two-sum/README.md
   commitUrl?: string; // omitted when status is "unchanged" (no commit was made)
   index: { updated: boolean };
   readme: { updated: boolean };
@@ -428,12 +429,325 @@ GitHub configuration, and it fails clearly rather than crashing the process when
 
 ---
 
+## Dashboard endpoints
+
+Introduced in Phase 8. All four are read-only `GET`s that serve the web dashboard. They read from
+PostgreSQL, so they need `DATABASE_URL` configured — see [docs/database.md](database.md). Without
+it, every one answers:
+
+```json
+{
+  "success": false,
+  "error": {
+    "message": "The dashboard needs a database: set DATABASE_URL and restart the API. See docs/database.md.",
+    "code": "DATABASE_NOT_CONFIGURED"
+  }
+}
+```
+
+(HTTP `503`.) They never call the AI or GitHub — they only read what earlier `/review`, `/document`,
+and `/publish` calls recorded, so they are cheap and safe to call as often as you like. A
+submission only shows up with a review, quality score, patterns, or GitHub link **after** the
+matching endpoint has been called for it.
+
+The wire types (`DashboardSummary`, `PatternStat`, `ProblemListItem`, `ProblemDetail`,
+`ProblemListQuery`) live in `@codereviewai/shared`, so the web app and the API share one
+definition. The rules behind each number are in
+[docs/database.md#analytics-rules](database.md#analytics-rules).
+
+### `GET /api/dashboard/summary`
+
+The dashboard's headline numbers.
+
+```ts
+interface DashboardSummary {
+  totalProblems: number; // distinct problems, each counted once by its latest submission
+  acceptedSolutions: number; // latest submission is "Accepted"
+  needingImprovement: number; // reviewed, and not optimal or has correctness concerns
+  optimalSolutions: number; // reviewed and judged optimal
+  unreviewed: number; // no AI review yet
+  currentStreak: number; // consecutive UTC days with a submission, ending today/yesterday
+  longestStreak: number;
+  patternsPracticed: number; // distinct tracked patterns across Accepted solutions
+  difficultyDistribution: { Easy: number; Medium: number; Hard: number; Unknown: number };
+  recentProblems: ProblemListItem[]; // the five most recent
+}
+```
+
+**Errors:** `503 DATABASE_NOT_CONFIGURED`.
+
+### `GET /api/dashboard/patterns`
+
+One entry for each of the 16 tracked patterns — always all 16, in a fixed order, including ones
+with no solutions yet (so gaps in practice are visible).
+
+```ts
+interface PatternStat {
+  pattern: 'Hash Map' | 'Two Pointers' | 'Sliding Window' | 'Binary Search' | 'Stack' | 'Queue'
+         | 'BFS' | 'DFS' | 'Heap' | 'Greedy' | 'Backtracking' | 'Dynamic Programming'
+         | 'Graph' | 'Tree' | 'Prefix Sum' | 'Sorting';
+  solved: number; // Accepted solutions using the pattern
+  averageQuality: number | null; // mean quality (0-100) of the reviewed ones, or null
+  improvementOpportunities: number; // solved ones that need improvement
+  revisit: Array<{ submissionId: string; title: string }>; // up to 3, lowest quality first
+}
+```
+
+**Errors:** `503 DATABASE_NOT_CONFIGURED`.
+
+### `GET /api/problems`
+
+The problem list — one row per problem (its latest submission), with optional search, filtering,
+and sorting. Every parameter is optional; an empty value (`?difficulty=`) is treated as absent.
+
+| Query parameter | Values | Effect |
+| --- | --- | --- |
+| `search` | text, ≤ 200 chars | Case-insensitive match against title, slug, problem number, and pattern names. |
+| `difficulty` | `Easy` \| `Medium` \| `Hard` | Exact match. |
+| `pattern` | one of the 16 tracked patterns | The problem uses that pattern. |
+| `status` | text (e.g. `Accepted`, `Wrong Answer`) | Exact match. |
+| `language` | text (e.g. `Python`) | Exact match. |
+| `sortBy` | `number` \| `title` \| `difficulty` \| `language` \| `status` \| `complexity` \| `quality` \| `date` | Default `date`. `difficulty` orders Easy < Medium < Hard; `complexity` orders by growth rate (O(1) < O(log n) < O(n) < …). Rows with no value for the sort key always sort last, in either direction. |
+| `sortOrder` | `asc` \| `desc` | Default `desc` for `date`, `asc` otherwise. |
+
+Filters combine with AND. Search/filter/sort are implemented once, in `@codereviewai/shared`
+(`applyProblemQuery`), and applied server-side.
+
+```ts
+interface ProblemListItem {
+  submissionId: string; // the id used by GET /api/problems/:id
+  problemId: string;
+  number: number | null;
+  slug: string;
+  title: string;
+  difficulty: 'Easy' | 'Medium' | 'Hard' | null;
+  patterns: TrackedPattern[]; // static + AI patterns, normalized; [] until reviewed
+  language: string | null;
+  status: string | null;
+  timeComplexity: string | null; // AI's assessment, or the static estimate if unreviewed
+  qualityScore: number | null; // 0-100; null until reviewed
+  isOptimal: boolean | null;
+  reviewed: boolean;
+  submittedAt: string; // ISO 8601
+  githubUrl: string | null; // link to the published document, once published
+}
+```
+
+Response: `ProblemListItem[]`.
+
+**Example:** `GET /api/problems?difficulty=Medium&pattern=Two%20Pointers&sortBy=quality&sortOrder=asc`
+
+**Errors:**
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| `400` | `VALIDATION_ERROR` | A parameter has an invalid value (unknown difficulty/pattern/sort key, or `search` over 200 chars) — see `error.details`. |
+| `503` | `DATABASE_NOT_CONFIGURED` | No database. |
+
+### `GET /api/problems/:id`
+
+The full detail for one problem. `:id` is a **submission id** (the `submissionId` from the list —
+the same id `POST /api/submissions` returned).
+
+```ts
+interface ProblemDetail {
+  submissionId: string;
+  problem: { number, slug, title, difficulty, url, description };
+  submission: { language, code, status, runtime, memory, submittedAt }; // the exact submitted code
+  analysis: AnalysisDetail | null; // Phase 4 static analysis; null until reviewed
+  review: ReviewDetail | null; // Phase 5 AI review, incl. betterApproach + agreement; null until reviewed
+  qualityScore: number | null;
+  document: { filename: string; githubUrl: string | null; publishedAt: string | null } | null;
+}
+```
+
+`review.betterApproach` is `null` when the solution is already optimal; otherwise it carries the
+description, pseudocode, code, complexity, and why it's better — always separate from
+`submission.code`, which is never modified. `review.agreement.hasDisagreement` is `true` when static
+analysis and the AI disagreed.
+
+**Errors:**
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| `404` | `NOT_FOUND` | No submission with that id — including an id that isn't a valid UUID. |
+| `503` | `DATABASE_NOT_CONFIGURED` | No database. |
+
+---
+
+## Improvement endpoints
+
+Introduced in Phase 9. Four read-only `GET`s that track how solutions evolve across attempts. Like
+the [dashboard endpoints](#dashboard-endpoints) they read PostgreSQL only, so without `DATABASE_URL`
+each answers `503 DATABASE_NOT_CONFIGURED`; they never call the AI or GitHub. Everything returned is
+derived from stored rows — see [docs/improvement-engine.md](improvement-engine.md) for the rules.
+An "attempt" is one submission of a problem; attempt numbers are 1-based, in order of arrival. Wire
+types (`ProblemHistory`, `AttemptComparison`, `LearningProfile`, `Recommendations`) are in
+`@codereviewai/shared`.
+
+### `GET /api/problems/:id/history`
+
+`:id` is the id of **any** submission of the problem (as with `GET /api/problems/:id`); the response
+covers every attempt at that problem.
+
+```json
+{
+  "success": true,
+  "data": {
+    "problem": { "number": 1, "slug": "two-sum", "title": "Two Sum", "difficulty": "Easy" },
+    "attempts": [
+      {
+        "attemptNumber": 1,
+        "submissionId": "9c1f…",
+        "submittedAt": "2026-09-17T10:00:00.000Z",
+        "language": "JavaScript",
+        "status": "Wrong Answer",
+        "runtime": "52 ms",
+        "memory": "42.1 MB",
+        "code": "…exactly as submitted…",
+        "reviewed": true,
+        "timeComplexity": "O(n^2)",
+        "spaceComplexity": "O(1)",
+        "patterns": [],
+        "qualityScore": 50,
+        "isOptimal": false,
+        "correctnessConcernsCount": 1,
+        "improvementsCount": 1,
+        "approach": "Check every pair."
+      }
+    ],
+    "comparisons": [
+      {
+        "fromAttempt": 1,
+        "toAttempt": 2,
+        "status": { "from": "Wrong Answer", "to": "Accepted", "change": "fixed" },
+        "timeComplexity": { "from": "O(n^2)", "to": "O(n)", "change": "improved" },
+        "spaceComplexity": { "from": "O(1)", "to": "O(1)", "change": "same" },
+        "patterns": { "added": ["Hash Map"], "removed": [] },
+        "algorithmChanged": true,
+        "qualityScore": { "from": 50, "to": 95, "delta": 45 },
+        "correctnessConcerns": { "from": 1, "to": 0, "delta": -1 },
+        "bugFixed": true,
+        "codeQualityImproved": true,
+        "code": { "linesAdded": 4, "linesRemoved": 6, "languageChanged": false, "identical": false },
+        "reviewedBoth": true,
+        "highlights": ["Status improved from Wrong Answer to Accepted.", "Time complexity improved from O(n^2) to O(n)."]
+      }
+    ],
+    "overview": {
+      "attemptCount": 2,
+      "firstStatus": "Wrong Answer",
+      "finalStatus": "Accepted",
+      "finalAccepted": true,
+      "firstAcceptedAttempt": 2,
+      "complexityJourney": ["O(n^2)", "O(n)"],
+      "outcome": "improved",
+      "explanation": ["Status path: Wrong Answer (attempt 1) → Accepted (attempt 2).", "…"]
+    }
+  }
+}
+```
+
+For an attempt that was never reviewed, `reviewed` is `false`, and `timeComplexity`,
+`spaceComplexity`, `qualityScore`, `isOptimal`, `approach` are `null` and `patterns` is `[]`; in the
+comparison, `algorithmChanged` and `codeQualityImproved` are `null`, complexity `change` is
+`"unknown"`, and `reviewedBoth` is `false`. `outcome` is `single-attempt`, `improved`, `regressed`,
+or `no-change`.
+
+**Errors:** `404 NOT_FOUND` for an unknown or malformed id; `503 DATABASE_NOT_CONFIGURED`.
+
+### `GET /api/problems/:id/compare?from=1&to=3`
+
+Compares any two attempts of the problem (they need not be adjacent or ordered) and returns one
+`AttemptComparison` — the same shape as an entry of `comparisons` above.
+
+| Query | Rule |
+| --- | --- |
+| `from`, `to` | Required positive integers (attempt numbers). |
+
+**Errors:** `400 VALIDATION_ERROR` for a missing, non-integer, or non-positive number; `404
+NOT_FOUND` for an unknown id or an attempt number the problem doesn't have; `503
+DATABASE_NOT_CONFIGURED`.
+
+### `GET /api/learning/profile`
+
+```json
+{
+  "success": true,
+  "data": {
+    "problems": 4,
+    "attempts": 7,
+    "reviewedAttempts": 6,
+    "sufficientData": true,
+    "insights": [
+      {
+        "id": "repeated-time-limit-exceeded",
+        "kind": "weakness",
+        "title": "Repeated Time Limit Exceeded",
+        "description": "Time Limit Exceeded was the judge's verdict on 3 of 7 recorded attempts, across 2 problem(s).",
+        "evidence": { "count": 3, "total": 7, "examples": [{ "submissionId": "…", "title": "Two Sum" }] }
+      }
+    ],
+    "patterns": [
+      { "pattern": "Hash Map", "problems": 2, "accepted": 2, "averageQuality": 92, "needingImprovement": 0, "level": "strong" }
+    ],
+    "notes": ["Only judge status, static analysis, and AI review results are stored, so qualities such as how well a solution is explained are not measured."]
+  }
+}
+```
+
+`insights[].kind` is `weakness` or `strength`; every insight has the `evidence` it rests on.
+`patterns` always lists all 16 tracked patterns with a `level` of `strong`, `developing`, `weak`, or
+`untouched`. With no submissions: zero counts, `insights: []`, and a note saying nothing has been
+recorded. **Errors:** `503 DATABASE_NOT_CONFIGURED`.
+
+### `GET /api/learning/recommendations`
+
+```json
+{
+  "success": true,
+  "data": {
+    "practiceMore": [
+      {
+        "pattern": "Sliding Window",
+        "action": "practice",
+        "reason": "No Sliding Window problem has been recorded among 4 problems.",
+        "evidence": { "count": 0, "total": 4, "examples": [] }
+      }
+    ],
+    "review": [
+      {
+        "pattern": "Graph",
+        "action": "review",
+        "reason": "1 of 3 Graph problems Accepted; 2 need improvement.",
+        "evidence": { "count": 2, "total": 3, "examples": [] }
+      }
+    ],
+    "sufficientData": true,
+    "summary": "Practice more: Sliding Window. Review: Graph."
+  }
+}
+```
+
+Each list holds at most 5 entries. With no submissions both lists are empty and `summary` says
+there is nothing to base recommendations on. **Errors:** `503 DATABASE_NOT_CONFIGURED`.
+
+### Changes to existing endpoints
+
+`POST /api/submissions/:id/document` and `/publish` (when a database is configured) may add three
+sections to the generated Markdown — `## Submission History`, `## How My Solution Improved`,
+`## Recurring Mistakes` — when the history supports them. The response shape is unchanged, and
+without a database or when the history lookup fails the document is exactly what it was in
+Phase 6/7. See [docs/document-generation.md](document-generation.md).
+
+---
+
 ## Not yet implemented
 
-- No `GET /api/submissions` or `GET /api/submissions/:id` — the repository interface supports
-  a full read path (`findById` was added in Phase 5), but no endpoint exposes it directly; the
-  only current read paths are indirect, via `POST /api/submissions/:id/review`,
-  `POST /api/submissions/:id/document`, and `POST /api/submissions/:id/publish`.
+- No `GET /api/submissions` or `GET /api/submissions/:id` — a raw submission can't be fetched
+  back directly. The dashboard's [`GET /api/problems`](#get-apiproblems) and
+  [`GET /api/problems/:id`](#get-apiproblemsid) are the read paths (they return the problem list
+  and a submission's full detail), and `review`/`document`/`publish` look a submission up internally.
 - No local document persistence — `POST /api/submissions/:id/document` returns the generated
   Markdown in the response only; nothing is saved to disk. Phase 7's
   `POST /api/submissions/:id/publish` does commit it to GitHub, but only there. See
@@ -442,10 +756,13 @@ GitHub configuration, and it fails clearly rather than crashing the process when
 - No OAuth for GitHub — only a single, manually-issued personal access token
   (`GITHUB_TOKEN`), per the Phase 7 MVP scope. See
   [docs/github-integration.md#future-oauth-design](github-integration.md#future-oauth-design).
-- No authentication — every request is currently trusted as coming from the user's own
+- No authentication (not scheduled in any phase yet) — every request is currently trusted as coming from the user's own
   extension; there's no concept of a logged-in user yet.
-- No persistence beyond the API process's lifetime — see
-  [docs/phases/phase-03.md](phases/phase-03.md#limitations).
+- No persistence **without a database** — with no `DATABASE_URL`, submissions live in memory and
+  are lost on restart, and the dashboard endpoints answer `503`. See
+  [docs/database.md](database.md).
+- No write endpoints for the dashboard, no pagination on `GET /api/problems` (it returns every
+  problem), and no user accounts — everything belongs to the single built-in local user.
 - No retry logic or caching for AI review, document, or publish requests — see
   [docs/ai-analysis.md#limitations](ai-analysis.md#limitations) and
   [docs/github-integration.md#limitations](github-integration.md#limitations).

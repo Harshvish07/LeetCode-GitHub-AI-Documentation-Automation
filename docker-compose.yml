@@ -1,0 +1,28 @@
+# Local PostgreSQL for the Phase 8 dashboard — optional. The API runs without it
+# (no DATABASE_URL = in-memory submissions, dashboard endpoints answer 503).
+#
+#   POSTGRES_PASSWORD=choose-a-password docker compose up -d
+#   # then, in apps/api/.env:
+#   # DATABASE_URL=postgres://codereviewai:choose-a-password@localhost:5432/codereviewai
+#
+# The password is read from your environment and is never stored in this file.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: codereviewai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your shell or a root .env file}
+      POSTGRES_DB: codereviewai
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - codereviewai-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U codereviewai -d codereviewai']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  codereviewai-pgdata:

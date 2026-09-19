@@ -56,7 +56,10 @@ export function createGitHubClient(config: GitHubClientConfig): GitHubClient {
       const octokit = await getOctokit();
       try {
         const response = await octokit.rest.repos.get({ owner, repo });
-        return { defaultBranch: response.data.default_branch };
+        return {
+          defaultBranch: response.data.default_branch,
+          htmlUrl: response.data.html_url,
+        };
       } catch (error) {
         throw toGitHubError(error, `Failed to look up repository ${owner}/${repo}.`);
       }

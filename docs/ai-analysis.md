@@ -223,7 +223,7 @@ internally consistent and schema-valid. Structured-output validation guarantees 
   none of them are forwarded — directly satisfying the task's "do not send unnecessary personal
   information."
 - **Today's data model has no user-identifying information at all** — no account, no email, no
-  IP address stored anywhere (Phase 9 is the first phase planned to add authentication). The
+  IP address stored anywhere (authentication is not scheduled in any phase yet). The
   discipline of only forwarding exactly what's needed is deliberate scaffolding for that future
   phase, not a response to a current, real risk.
 - **The API key never reaches the browser, the extension, or the frontend.** `AI_PROVIDER_API_KEY`

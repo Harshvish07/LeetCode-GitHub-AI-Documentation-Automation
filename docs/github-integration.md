@@ -109,7 +109,7 @@ what that future implementation would look like:
 ```ts
 export function createOAuthProvider(config: {
   userId: string;
-  tokenStore: OAuthTokenStore; // wherever refresh tokens live once Phase 9 adds accounts
+  tokenStore: OAuthTokenStore; // wherever refresh tokens live once accounts exist (not yet scheduled)
 }): GitHubAuthProvider {
   return {
     async getToken() {

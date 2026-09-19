@@ -10,7 +10,10 @@ describe('RepositoryService.ensureAccessible', () => {
 
     const result = await service.ensureAccessible();
 
-    expect(result).toEqual({ defaultBranch: 'main' });
+    expect(result).toEqual({
+      defaultBranch: 'main',
+      htmlUrl: 'https://github.com/mock/mock',
+    });
   });
 
   it('propagates a NOT_FOUND GitHubError unchanged when the repository does not exist', async () => {

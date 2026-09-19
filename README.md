@@ -1,14 +1,24 @@
 # CodeReviewAI — AI-Powered LeetCode Solution Analyzer
 
-> **Status: Phase 7 of 10 — GitHub Integration.** `POST /api/submissions/:id/publish` takes
-> Phase 6's generated Markdown learning document and commits it to a configured GitHub
-> repository — a per-problem `problems/NNN-slug/README.md`, a structured `problems/index.json`,
-> and an auto-maintained root `README.md` table — with explicit duplicate detection so a
-> re-analyzed problem is never silently overwritten. Token-based auth only for now (no OAuth
-> yet) — see [Phase Status](#21-phase-status) and
+> **Status: Phase 9 of 10 — Improvement Tracking.** Every problem now keeps its full
+> attempt history (failed → improved → accepted) with a comparison of what changed between
+> attempts, a **personal learning profile** of recurring weaknesses, and a **recommendation
+> engine** — all derived from stored data only, never invented, and shown on the problem detail
+> page and a new **Learning** page. Generated documents optionally gain `## Submission History`,
+> `## How My Solution Improved`, and `## Recurring Mistakes` sections. See
+> [docs/improvement-engine.md](docs/improvement-engine.md) and
+> [docs/phases/phase-09.md](docs/phases/phase-09.md).
+>
+> **Phase 8 — Dashboard & Learning Analytics.** A web dashboard
+> (`apps/web`) shows your DSA learning progress — total/accepted/optimal/needs-improvement
+> counts, streaks, difficulty distribution, per-pattern analytics for 16 patterns, a
+> searchable/filterable/sortable problem list, and a per-problem detail view (your code, static
+> analysis, AI review, better approach, learning points, GitHub link) — backed by a new optional
+> **PostgreSQL** persistence layer with migrations. See [Phase Status](#21-phase-status),
+> [docs/phases/phase-08.md](docs/phases/phase-08.md), and [docs/database.md](docs/database.md)
+> for exactly what is implemented today. Earlier phases: Phase 7 (GitHub publishing):
 > [docs/phases/phase-07.md](docs/phases/phase-07.md) /
-> [docs/github-integration.md](docs/github-integration.md) for exactly what is implemented
-> today (Phase 1: [docs/phases/phase-01.md](docs/phases/phase-01.md), Phase 2:
+> [docs/github-integration.md](docs/github-integration.md); (Phase 1: [docs/phases/phase-01.md](docs/phases/phase-01.md), Phase 2:
 > [docs/phases/phase-02.md](docs/phases/phase-02.md), Phase 3:
 > [docs/phases/phase-03.md](docs/phases/phase-03.md), Phase 4:
 > [docs/phases/phase-04.md](docs/phases/phase-04.md), Phase 5:
@@ -62,18 +72,31 @@ zero manual write-up effort.
   (Phase 6)
 - Automatic commit of that document to a GitHub repository via the GitHub API, with duplicate
   detection and structured commits (Phase 7)
-- A web dashboard to browse past submissions and generated documents, plus real (database)
-  persistence to support it (Phase 8+ — no database exists yet; see
-  [Known Limitations](#27-known-limitations))
-- Authentication and polish (Phase 9–10)
+- A web dashboard to browse past submissions and generated documents, with pattern analytics,
+  backed by a PostgreSQL persistence layer with migrations (Phase 8)
+- Per-problem attempt history, attempt-to-attempt comparison, a learning profile of recurring
+  weaknesses, and evidence-backed practice/review recommendations (Phase 9)
+- Polish and hardening (Phase 10)
 
 ## 5. Current implementation status
 
-**Phases 1–7.** What exists right now:
+**Phases 1–9.** What exists right now:
+
+- The **improvement engine** (Phase 9), `apps/api/src/analytics/` plus
+  `services/improvement.service.ts`: pure functions that turn stored submissions into an
+  attempt history, attempt-to-attempt comparisons (status, complexity, patterns, bug fixes,
+  quality, a line diff), a learning profile, and recommendations, exposed by four read endpoints
+  (`GET /api/problems/:id/history`, `/api/problems/:id/compare`, `/api/learning/profile`,
+  `/api/learning/recommendations`). Every statement carries its "N of M" evidence, and history
+  needs **no new migration** — attempts are the `submissions` rows that already existed. See
+  [docs/improvement-engine.md](docs/improvement-engine.md).
 
 - A working npm-workspaces monorepo with five packages (`apps/web`, `apps/api`,
   `apps/extension`, `packages/shared`, `packages/analysis`).
-- A React + Vite frontend that renders a status page and calls the backend health endpoint.
+- A React + Vite frontend (Phase 8, extended in Phase 9): a four-page dashboard — Dashboard,
+  Problems, Problem detail (now with a submission-history section), and Learning (profile and
+  recommendations) — built from small reusable components (`apps/web/src/components/`), with hash routing,
+  a typed API client, and a light/dark theme. See [The dashboard](#the-dashboard) below.
 - An Express + TypeScript backend with `GET /api/health` and (Phase 3) `POST /api/submissions`
   — layered routes → validation middleware → controllers → services → repositories, with a
   Zod schema that is the real runtime source of truth for what the server accepts, a
@@ -131,14 +154,29 @@ zero manual write-up effort.
   (`GITHUB_TOKEN`), behind an abstraction ready for OAuth later. See
   [docs/github-integration.md](docs/github-integration.md) and
   [docs/phases/phase-07.md](docs/phases/phase-07.md).
+- A persistence layer, `apps/api/src/persistence/` (Phase 8): PostgreSQL behind a small
+  `Database` interface (the only file importing `pg` is `pgDatabase.ts`), a versioned migration
+  runner, and six tables — `users`, `problems`, `submissions`, `analyses`, `reviews`,
+  `documents`. **Optional:** with no `DATABASE_URL` the API runs exactly as before (in-memory
+  submissions) and the dashboard endpoints answer `503`. Review, document, and publish requests
+  now also *record* their results (best-effort) for the dashboard. See
+  [docs/database.md](docs/database.md).
+- An analytics layer, `apps/api/src/analytics/` (Phase 8): pure, database-free functions for the
+  0-100 **quality score**, UTC-day **streaks**, **pattern normalization** onto 16 tracked
+  patterns, and every dashboard statistic — plus four read endpoints (`GET /api/dashboard/summary`,
+  `/api/dashboard/patterns`, `/api/problems`, `/api/problems/:id`). See
+  [docs/api.md](docs/api.md#dashboard-endpoints) and [docs/phases/phase-08.md](docs/phases/phase-08.md).
 - Strict TypeScript, ESLint (flat config), Prettier, and Vitest configured and passing across
-  every package — 401 tests total (269 API — 83 new this phase, 41 extension, 2 web, 16
-  shared, 73 analysis). No test anywhere ever makes a real AI or GitHub API call — every such
-  test uses a mocked provider/client.
+  every package — 730 tests total (476 API — 67 new in Phase 9, 41 extension, 102 web — 7 new,
+  38 shared — 5 new, 73 analysis). No test anywhere ever makes a real AI or GitHub API call — every such
+  test uses a mocked provider/client — and the database tests run real Postgres SQL in-process
+  via PGlite, with no server.
 
-Nothing beyond this exists yet. There is no database (submissions live in memory and are lost
-on API restart), no authentication, no OAuth (GitHub publishing uses a single token only), and
-no web/extension UI triggers any of the review/document/publish endpoints yet — see
+Nothing beyond this exists yet. There is no authentication or multi-user support (everything
+belongs to one built-in local user), no OAuth (GitHub publishing uses a single token only), and
+no web/extension UI *triggers* a review, document, or publish — the dashboard displays what those
+endpoints recorded, and they are still called via `curl`. The dashboard UI has not been seen in a
+real browser, and no stock PostgreSQL server was available to test against — see
 [Known Limitations](#27-known-limitations).
 
 ## 6. Architecture overview
@@ -149,7 +187,8 @@ flowchart LR
     subgraph Browser
         EXT[Chrome Extension<br/>apps/extension]
     end
-    WEB[React Frontend<br/>apps/web] -- HTTP --> API[Express API<br/>apps/api]
+    WEB[React Dashboard<br/>apps/web] -- "HTTP: /api/dashboard/*, /api/problems*" --> API[Express API<br/>apps/api]
+    API -- "SQL via pg (optional)" --> DB[(PostgreSQL)]
     EXT -- "POST /api/submissions<br/>(host_permissions bypasses CORS)" --> API
     API -- imports types --> SHARED[Shared Types<br/>packages/shared]
     WEB -- imports types --> SHARED
@@ -161,8 +200,8 @@ flowchart LR
     API -. future phase (OAuth) .-> OAUTH[GitHub OAuth]
 ```
 
-Implemented today: the web frontend calls the API's health endpoint (proxied through Vite in
-development); the extension's content script reads a LeetCode problem page's DOM and returns
+Implemented today: the web dashboard (Phase 8) reads the API's dashboard endpoints (proxied
+through Vite in development), which read from PostgreSQL when `DATABASE_URL` is set; the extension's content script reads a LeetCode problem page's DOM and returns
 structured data to the popup on request; the popup can POST that data to
 `POST /api/submissions`, which validates, normalizes, and stores it; all three apps share type
 definitions from `packages/shared`; the deterministic analysis engine (`packages/analysis`,
@@ -181,14 +220,15 @@ context in [docs/architecture.md](docs/architecture.md).
 
 | Area       | Technology                                   | Why                                                                                          |
 | ---------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Frontend   | React 19, TypeScript, Vite                   | Fast dev server, minimal config, industry-standard component model.                            |
+| Frontend   | React 19, TypeScript, Vite (hash routing, plain CSS — no router or UI library) | Fast dev server and a dashboard small enough that a router/chart/UI dependency would cost more than it saves. |
 | Backend    | Node.js, Express 5, TypeScript, Zod           | Small, well-understood HTTP framework; Zod gives runtime schema validation that doesn't just trust a client-side TypeScript type. |
 | Extension  | Chrome Extension Manifest V3, TypeScript, esbuild | MV3 is the current Chrome extension standard; esbuild gives fast, dependency-light bundling.   |
 | Shared     | TypeScript project (`packages/shared`)       | Single source of truth for types/contracts shared across web, api, and extension.              |
 | Analysis   | TypeScript project (`packages/analysis`), no runtime dependencies | Deterministic pattern/complexity/quality/edge-case heuristics, kept dependency-free and standalone so it's trivially testable and reusable from any future consumer. |
 | AI         | Anthropic Claude (Messages API) or Google Gemini (`generateContent` API), selected by `AI_PROVIDER` via a swappable `AiProvider` interface | A structured, schema-validated review layered on Phase 4's deterministic findings; the provider abstraction means a different LLM vendor is a new file, not a rewrite. |
 | GitHub     | `@octokit/rest` behind a swappable `GitHubClient` interface | Official GitHub REST API client; the abstraction (mirroring `AiProvider`) means auth can move from a single token to OAuth later without touching request logic. |
-| Testing    | Vitest, Supertest, React Testing Library      | Fast, Vite-native test runner; Supertest for HTTP assertions; RTL for component behavior.       |
+| Database   | PostgreSQL via `pg`, behind a swappable `Database` interface; SQL migrations written as TypeScript modules | Relational data with real constraints and a latest-per-problem query; the interface keeps `pg` in one file, and tests run real Postgres SQL in-process with PGlite (no server). |
+| Testing    | Vitest, Supertest, React Testing Library, PGlite | Fast, Vite-native test runner; Supertest for HTTP assertions; RTL for component behavior.       |
 | Code quality | ESLint (flat config) + typescript-eslint, Prettier | Consistent style and catch common bugs across a multi-package repo from one root config.  |
 | Tooling    | npm workspaces                                | See [Package management decision](#package-management-decision) below.                         |
 
@@ -211,15 +251,20 @@ pnpm+Lerna, etc.). Reasoning:
 ```
 /
 ├── apps/
-│   ├── web/            React + Vite frontend
+│   ├── web/            React + Vite dashboard (Phase 8)
+│   │       └── src/
+│   │           ├── pages/              DashboardPage, ProblemsPage, ProblemDetailPage, LearningPage
+│   │           ├── components/          common/ dashboard/ problems/ detail/ improvement/ layout/
+│   │           ├── api/  hooks/  router/   Typed API client, useAsync, hash routing
+│   │           └── App.tsx               Header + route switch
 │   ├── api/             Express + TypeScript backend
 │   │       └── src/
-│   │           ├── routes/          POST /api/submissions(/:id/review, /:id/document, /:id/publish), GET /api/health
+│   │           ├── routes/          POST /api/submissions(/:id/review, /:id/document, /:id/publish), GET /api/dashboard/*, GET /api/problems(/:id), GET /api/problems/:id/(history|compare), GET /api/learning/(profile|recommendations), GET /api/health
 │   │           ├── controllers/      Thin HTTP handlers + shared error mapping (aiErrorMapping.ts, githubErrorMapping.ts)
 │   │           ├── services/          Business logic (normalize, assign id, persist,
 │   │           │                      buildCombinedReview() + GitHubPublishService shared by all three endpoints)
 │   │           ├── schemas/            Zod validation (the real runtime contract)
-│   │           ├── repositories/        Storage abstraction (in-memory today)
+│   │           ├── repositories/        SubmissionRepository interface + in-memory implementation
 │   │           ├── middleware/           validateBody, errorHandler, requestLogger
 │   │           ├── types/                 ApiError/ValidationError/NotFoundError
 │   │           ├── ai/                     AI review layer (Phase 5 — see below)
@@ -232,6 +277,12 @@ pnpm+Lerna, etc.). Reasoning:
 │   │           │   ├── templates/               One file per document section group
 │   │           │   ├── formatter/                Safe filename generation
 │   │           │   └── document-generator.ts       The one exported entry point
+│   │           ├── persistence/             PostgreSQL layer (Phase 8 — see docs/database.md)
+│   │           │   ├── database.ts / pgDatabase.ts   Database interface + the one `pg` implementation
+│   │           │   ├── migrate.ts / migrations/       Versioned schema + runner
+│   │           │   └── postgres*Repository.ts          Submission + learning (dashboard) repositories
+│   │           ├── analytics/                Quality score, streaks, pattern normalization, statistics (Phase 8);
+│   │           │                             attempts, comparison, learning profile, recommendations (Phase 9)
 │   │           └── github/                  GitHub publishing layer (Phase 7 — see below)
 │   │               ├── github-client.ts        GitHubClient interface + the one Octokit implementation
 │   │               ├── repository.service.ts    Repository lookup
@@ -263,6 +314,8 @@ pnpm+Lerna, etc.). Reasoning:
 │   ├── ai-analysis.md
 │   ├── document-generation.md
 │   ├── github-integration.md
+│   ├── improvement-engine.md
+│   ├── database.md
 │   ├── architecture.md
 │   ├── development.md
 │   ├── project-overview.md
@@ -273,8 +326,11 @@ pnpm+Lerna, etc.). Reasoning:
 │       ├── phase-04.md
 │       ├── phase-05.md
 │       ├── phase-06.md
-│       └── phase-07.md
+│       ├── phase-07.md
+│       ├── phase-08.md
+│       └── phase-09.md
 │
+├── docker-compose.yml   Optional local PostgreSQL (password from your environment)
 ├── .env.example
 ├── .gitignore
 ├── .prettierrc.json / .prettierignore
@@ -288,10 +344,39 @@ pnpm+Lerna, etc.). Reasoning:
 
 ### `apps/web` — React frontend
 
-Vite + React + TypeScript app. `src/App.tsx` renders the project status page and calls
-`GET /api/health` (proxied to the backend by Vite's dev server so the frontend never
-hardcodes a backend port). `src/main.tsx` is the React entry point. `vite.config.ts`
-configures the dev server proxy and Vitest's `jsdom` test environment.
+Vite + React + TypeScript app — since Phase 8, the learning dashboard. `src/App.tsx` is just a
+header plus a route switch over three pages (`src/pages/`): **Dashboard**, **Problems**, and
+**Problem detail**, each composed from small reusable components in `src/components/` (`common/`,
+`dashboard/`, `problems/`, `detail/`, `layout/`) — deliberately no giant `Dashboard.tsx`.
+`src/api/dashboardApi.ts` is a typed fetch client over the dashboard endpoints (proxied to the
+backend by Vite's dev server so the frontend never hardcodes a backend port), `src/hooks/useAsync.ts`
+tracks loading/error state and ignores stale responses, and `src/router/routes.ts` is a
+dependency-free hash router (`#/`, `#/problems`, `#/problems/<id>`). `vite.config.ts` configures the
+dev proxy and Vitest's `jsdom` environment. The Phase 1 health check survives as a small
+`BackendStatus` widget in the header.
+
+#### The dashboard
+
+- **Dashboard** — stat cards (total problems, accepted, needs improvement, optimal, current
+  streak, patterns practiced), difficulty-distribution bars, recent problems, and a table for all
+  16 tracked patterns (Hash Map, Two Pointers, Sliding Window, Binary Search, Stack, Queue, BFS,
+  DFS, Heap, Greedy, Backtracking, Dynamic Programming, Graph, Tree, Prefix Sum, Sorting) showing
+  how many you've solved, your average quality, and links to the problems most worth revisiting.
+  Patterns you haven't touched are dimmed, not hidden.
+- **Problems** — search plus difficulty/pattern/status/language filters and sortable columns
+  (Problem, Difficulty, Pattern, Language, Status, Complexity, Quality, Date, GitHub document).
+- **Problem detail** — problem information, **your** code exactly as submitted, the static
+  analysis, the AI review (with an explicit notice when it disagreed with the static analysis),
+  the better approach (labeled **RECOMMENDED**, never confusable with your code), learning points,
+  the GitHub link, and (Phase 9) the **submission history**: every attempt in order with its
+  status, runtime, memory, complexity, and quality, an "Improved / Regressed / No change" summary
+  with the time-complexity journey, and one comparison card per consecutive pair of attempts.
+- **Learning** (Phase 9) — "what to work on" (Practice more / Review) and the learning profile:
+  recurring weaknesses and strengths, each with "N of M" evidence and links to example problems,
+  a per-pattern level table, and the profile's own limitations.
+
+The dashboard needs the API to have a database (`DATABASE_URL`); without one it shows the API's
+clear "the dashboard needs a database" message. See [docs/phases/phase-08.md](docs/phases/phase-08.md).
 
 ### `apps/api` — Express backend
 
@@ -409,7 +494,10 @@ and its nested types. `src/types/submission.ts` (Phase 3) defines `CreateSubmiss
 `StoredSubmission` — the `POST /api/submissions` wire contract, reusing the Phase 2 types
 as-is. `src/utils/leetcodeUrl.ts` (moved here from the extension in Phase 3) holds
 `isLeetCodeProblemUrl`/`extractSlugFromUrl`, so the extension and the API validate a LeetCode
-URL with the exact same logic instead of two copies that could drift apart.
+URL with the exact same logic instead of two copies that could drift apart. In Phase 8 it also
+holds the dashboard's wire types (`src/types/dashboard.ts`: `DashboardSummary`, `PatternStat`,
+`ProblemListItem`, `ProblemDetail`, …) and `src/dashboard/problemQuery.ts`, the one implementation
+of problem search/filter/sort, so the API and web app can never disagree about what they mean.
 
 ### `packages/analysis` — Deterministic solution-analysis engine
 
@@ -483,6 +571,13 @@ Project-level documentation, described in [Documentation](#documentation-map) be
   included in any HTTP response, and neither `apps/web` nor `apps/extension` has any code path
   that could read it. See
   [docs/github-integration.md](docs/github-integration.md#authentication-and-token-handling).
+- **Frontend ↔ Backend, dashboard (implemented, Phase 8):** `apps/web` reads `GET /api/dashboard/summary`,
+  `/api/dashboard/patterns`, `/api/problems`, and `/api/problems/:id` through its typed client. These
+  are read-only and never call the AI or GitHub. See [docs/api.md](docs/api.md#dashboard-endpoints).
+- **`apps/api` ↔ PostgreSQL (implemented, Phase 8, optional, server-side only):** repositories talk
+  to a `Database` interface; `pgDatabase.ts` (the only file importing `pg`) implements it from
+  `DATABASE_URL`, which is read once, never logged, and never reaches the browser. See
+  [docs/database.md](docs/database.md).
 - **`POST /api/submissions/:id/review` ↔ `.../document` ↔ `.../publish` (implemented, Phase
   6–7):** all three endpoints call the same `buildCombinedReview()` helper
   (`apps/api/src/services/combined-review.service.ts`), so a generated document — whether
@@ -501,6 +596,10 @@ Project-level documentation, described in [Documentation](#documentation-map) be
 - A GitHub personal access token (`GITHUB_TOKEN`) and target repository (`GITHUB_REPO`) are
   needed **only** to actually call `POST /api/submissions/:id/publish` — every other command,
   endpoint, and test works with no GitHub configuration at all.
+- A PostgreSQL database (`DATABASE_URL`) is needed **only** for the dashboard and for persisting
+  submissions across restarts — without one the API runs as before (in-memory) and the dashboard
+  answers `503`. `docker compose up -d` starts a local one (see [docs/database.md](docs/database.md)).
+  **Tests never need Postgres** — they run real Postgres SQL in-process (PGlite).
 
 ### Installation
 
@@ -530,6 +629,9 @@ cp .env.example apps/api/.env
 | `AI_PROVIDER_MODEL`   | apps/api | `claude-sonnet-5` (Anthropic) / `gemini-3.6-flash` (Gemini) | Which model the review endpoint calls.       |
 | `GITHUB_TOKEN`        | apps/api | *(none)*                   | A personal access token (Contents read/write on the target repo). Only `POST /api/submissions/:id/publish` needs it — every other endpoint works fully without it. |
 | `GITHUB_REPO`         | apps/api | *(none)*                   | The target repository to publish into, as `"owner/repo"`.          |
+| `DATABASE_URL`        | apps/api | *(none)*                   | PostgreSQL connection string. Optional — enables the dashboard and persistent storage; migrations run at startup. Contains a password: never commit it. |
+| `DATABASE_SSL`        | apps/api | `false`                    | Set `true` for hosted Postgres that requires TLS.                  |
+| `POSTGRES_PASSWORD`   | docker-compose | *(none)*             | Only for `docker-compose.yml`: the local dev database's password, read from your environment.  |
 
 ### Running the project
 
@@ -538,8 +640,13 @@ cp .env.example apps/api/.env
 npm run dev
 
 # Or run them individually
-npm run dev:web    # http://localhost:5173
+npm run dev:web    # http://localhost:5173  (the dashboard)
 npm run dev:api    # http://localhost:4000
+
+# Optional: a local PostgreSQL for the dashboard
+POSTGRES_PASSWORD=choose-one docker compose up -d
+# put DATABASE_URL=postgres://codereviewai:choose-one@localhost:5432/codereviewai in apps/api/.env
+npm run db:migrate -w @codereviewai/api    # or just start the API — it migrates at startup
 
 # Build the extension (loads via chrome://extensions → "Load unpacked" → apps/extension/dist)
 npm run build -w @codereviewai/extension
@@ -570,7 +677,7 @@ npm run test -w @codereviewai/api        # a single workspace
 npm run test:watch -w @codereviewai/web  # watch mode (per-workspace script)
 ```
 
-Each workspace uses Vitest — 401 tests total. `apps/api` additionally uses Supertest to
+Each workspace uses Vitest — 730 tests total. `apps/api` additionally uses Supertest to
 exercise the Express app over HTTP without binding a real port, covering `POST /api/submissions`
 at every layer (schema rules, service normalization, repository round-trips, and full
 HTTP-level integration — valid submission, invalid submission, missing code, invalid language,
@@ -588,14 +695,22 @@ problem description can never inject rogue document structure), and
 update, duplicate detection in both directions — a `"create"` against an existing problem is
 rejected, an `"update"` against a nonexistent one is rejected — the byte-identical-content no-op
 path, commit-message generation that's asserted to never be generic, and every GitHub API
-failure mode); `apps/web` uses React Testing Library with a `jsdom` environment;
-`apps/extension`'s LeetCode adapter tests construct synthetic pages with `jsdom`'s `JSDOM` class
+failure mode), and the four dashboard endpoints (since Phase 8 — every filter, search, sort, and
+validation error; the full problem detail; recording of documents and GitHub links; best-effort
+recording failure; and `503` with no database) against **real Postgres SQL run in-process via PGlite**
+— which also backs the migration tests (idempotence, rollback, ordering, constraints) and the
+repository tests (exact code round-trip, upserts, latest-submission-per-problem, per-user isolation);
+the pure analytics (quality score, streaks, pattern normalization, statistics) have 73 tests of their
+own; `apps/web` (95 tests) uses React Testing Library with a `jsdom` environment to test every
+dashboard component, the three pages (loading, error/retry, filtering and sorting driven through the
+API), routing, and the `useAsync` hook (including stale-response handling); `packages/shared` tests
+the shared filter/sort functions; `apps/extension`'s LeetCode adapter tests construct synthetic pages with `jsdom`'s `JSDOM` class
 directly (URL detection, slug/title/difficulty/code extraction, and — importantly — that
 missing fields come back `null` instead of guessed values), and `lib/api.test.ts` exercises the
 extension's API client against a stubbed `fetch`; `packages/analysis` (73 tests) covers every
 pattern-detection rule, every complexity/code-quality/edge-case heuristic, and all 7
 required-problem fixtures run end-to-end through `analyzeSolution()`. **No test anywhere makes a
-real AI or GitHub API call** — every AI-facing test in `apps/api/src/ai/` and
+real AI or GitHub API call, and none needs a Postgres server** — every AI-facing test in `apps/api/src/ai/` and
 `apps/api/src/document/` uses `providers/mockProvider.ts` or a mocked `fetch`, and every
 GitHub-facing test in `apps/api/src/github/` uses `mockGitHubClient.ts` or an injected mock
 `fetch`.
@@ -620,17 +735,17 @@ npm run format:check     # Prettier --check (used in CI-style verification)
 | 4     | Deterministic (non-AI) solution-analysis engine: pattern detection, complexity heuristics, code quality, edge cases (complete) |
 | 5     | AI-powered solution review, layered on top of Phase 4's deterministic analysis (complete) |
 | 6     | Learning document generation from the combined review (complete)       |
-| 7     | GitHub integration: commit generated documents automatically (this phase) |
-| 8     | Web dashboard: browse past submissions and documents (real, database persistence likely lands around here — see below) |
-| 9     | Authentication and per-user data                                       |
+| 7     | GitHub integration: commit generated documents automatically (complete) |
+| 8     | Web dashboard, learning analytics, and PostgreSQL persistence (complete) |
+| 9     | Improvement tracking: attempt history, comparison, learning profile, recommendations (this phase) |
 | 10    | Polish, deployment, end-to-end hardening                               |
 
 *(Note: an earlier draft of this table listed "persistence layer" as Phase 4, and a later draft
 folded persistence into Phase 6 alongside document generation — Phase 4 turned out to be the
 analysis engine documented below, and Phase 6 turned out to be document generation only, with no
 persistence. Each phase's actual scope is set by that phase's own kickoff instructions, not
-predicted in advance by this table; treat "database persistence" as still-undated until a phase
-actually claims it.)*
+predicted in advance by this table. Database persistence finally arrived in Phase 8, alongside
+the dashboard that first needed it.)*
 
 ## 21. Phase status
 
@@ -655,7 +770,16 @@ actually claims it.)*
   [docs/github-integration.md](docs/github-integration.md) for the full record of what was
   built, verified, and why.
 
-Phases 8–10 have not been started.
+- **Phase 8 — Dashboard & Learning Analytics: complete.** See
+  [docs/phases/phase-08.md](docs/phases/phase-08.md) and [docs/database.md](docs/database.md) for the
+  full record of what was built, verified, and why.
+
+- **Phase 9 — Improvement Tracking: complete.** See
+  [docs/phases/phase-09.md](docs/phases/phase-09.md) and
+  [docs/improvement-engine.md](docs/improvement-engine.md) for the full record of what was built,
+  verified, and why.
+
+Phase 10 has not been started.
 
 ## 22. Future architecture
 
@@ -665,22 +789,20 @@ Later phases add, without changing what exists today:
   so this is a new implementation of that interface, not a change to `github-client.ts` or
   anything above it. See
   [docs/github-integration.md#future-oauth-design](docs/github-integration.md#future-oauth-design).
-- **Persistence** in `apps/api` (database TBD — likely PostgreSQL or SQLite for a portfolio
-  deployment) implementing the existing `SubmissionRepository` interface, replacing
-  `InMemorySubmissionRepository` with no change to the service/controller/route above it — this
-  is also the point where a *generated review* or *generated document* itself becomes worth
-  persisting, not just the raw submission. Not yet assigned to a specific phase.
-- Read endpoints (`GET /api/submissions`, `GET /api/submissions/:id`) once there's a
-  persistence layer worth reading from — `findById` already exists on the repository interface
-  (added in Phase 5 for the review endpoint's internal use), so this is mostly a routing
-  addition.
+- **Authentication and per-user data** (not scheduled in any phase yet): real accounts replacing the seeded `local` user.
+  The schema is ready for it — `user_id` is on every submission and every repository query is
+  already scoped by it — so this adds login, not a schema rewrite.
+- Pagination and SQL-side aggregation for the problem list and dashboard once a dataset outgrows
+  application-code aggregation (the GIN indexes are already in place), and *review* history (Phase 9 tracks
+  every *attempt*, but each submission still keeps only its latest analysis/review/document).
 - Retry logic and response caching for AI review/document-generation/publish requests, and
   extension/web UI that actually triggers `POST /api/submissions/:id/review`,
   `.../document`, or `.../publish` (see
   [docs/ai-analysis.md#limitations](docs/ai-analysis.md#limitations),
   [docs/document-generation.md#limitations](docs/document-generation.md#limitations), and
   [docs/github-integration.md#limitations](docs/github-integration.md#limitations)).
-- A **dashboard** in `apps/web` for browsing historical submissions and documents.
+- UI that *triggers* a review, document generation, or publish from the dashboard or extension
+  (today the dashboard only displays what those endpoints recorded).
 - **`patterns/` in the published repository** — reserved but deliberately unimplemented in
   Phase 7 ("do not overbuild pattern files yet").
 
@@ -738,6 +860,17 @@ Full detail and diagrams: [docs/architecture.md](docs/architecture.md).
   never logged, and never included in any HTTP response (`PublishResult` returns a `commitUrl`,
   not the token). See
   [docs/github-integration.md#authentication-and-token-handling](docs/github-integration.md#authentication-and-token-handling).
+- **Database credentials never enter the repository or the logs.** `DATABASE_URL` (which contains
+  the password) is read once, server-side, in `persistence/createDatabaseFromEnv.ts`; `.env` is
+  gitignored and `.env.example` documents names only. `docker-compose.yml` reads
+  `POSTGRES_PASSWORD` from your environment and refuses to start without it. Every SQL statement is
+  parameterized (no value is ever concatenated into SQL), and recording failures log only an error
+  *message* — never SQL parameters, which contain submitted code. See
+  [docs/database.md](docs/database.md#configuration-and-secrets).
+- **The dashboard renders submitted code and AI text as plain text**, never as markup — React
+  escapes it, and code is shown in a `<pre><code>` block — so a submission or AI response
+  containing `<script>` or HTML cannot inject anything into the page (there's a test with exactly
+  that content).
 - **A duplicate is never silently overwritten.** `POST /api/submissions/:id/publish` rejects a
   `mode: "create"` request against a problem that's already published (`409 GITHUB_CONFLICT`)
   rather than overwriting it; an intentional overwrite requires the caller to explicitly pass
@@ -827,16 +960,35 @@ and manual `curl` requests.
 - Submitted-code extraction reads whatever `.view-line` elements Monaco currently has rendered
   in the DOM; this can be incomplete or lose exact whitespace/indentation for long files, and
   is explicitly best-effort.
-- **No persistent storage.** `POST /api/submissions` stores submissions in memory
-  (`InMemorySubmissionRepository`) — everything is lost when the API process restarts. This
-  was explicit Phase 3 scope ("do NOT introduce PostgreSQL yet unless genuinely required");
-  real persistence is not yet assigned to a specific phase — see
-  [Development roadmap](#20-development-roadmap) above.
-- No read endpoints exposing submissions directly — a submission can be created, reviewed
-  (`POST /api/submissions/:id/review`), turned into a document
-  (`POST /api/submissions/:id/document`), and published to GitHub
-  (`POST /api/submissions/:id/publish`) — all three look it up internally via the repository's
-  `findById` — but there's no `GET /api/submissions/:id` to fetch one back directly yet.
+- **Persistence needs a database.** Since Phase 8, submissions, analyses, reviews, and documents
+  persist in PostgreSQL — but only when `DATABASE_URL` is set. Without it the API keeps submissions
+  in memory (lost on restart) and the dashboard endpoints answer `503 DATABASE_NOT_CONFIGURED`.
+  See [docs/database.md](docs/database.md#limitations).
+- **The dashboard UI has never been rendered in a real browser** — no browser automation was
+  available. It was verified by typecheck, a production `vite build`, and 102 jsdom tests against a
+  mocked `fetch`; the layout, dark-mode appearance, and responsiveness have not been looked at by a
+  human. Opening `http://localhost:5173` with the API and a database running is the recommended
+  first check.
+- **The database layer was never run against a stock PostgreSQL server** (no install or running
+  Docker daemon here); `docker-compose.yml` has never been started. The SQL ran on PGlite (real
+  Postgres semantics) in-process and, for the `pg` driver, over a wire-protocol socket. See
+  [docs/database.md](docs/database.md#limitations).
+- **Improvement-engine limits (Phase 9):** the profile and recommendations are rule-based
+  heuristics over stored data with fixed thresholds (a weakness needs at least 2 occurrences), not
+  a model of the learner; pattern suggestions come from keyword matching in the AI's better-approach
+  text; a submission's attempt number is its order of arrival, so a resubmission of unchanged code
+  counts as an attempt; "explanations are weak"-style weaknesses are **not** produced because no
+  explanation quality is stored. See [docs/improvement-engine.md](docs/improvement-engine.md#limitations).
+  The new Learning page and history section have, like the dashboard, never been rendered in a real
+  browser.
+- **Dashboard details to know:** one row per problem from its *latest* submission (each submission
+  keeps only its latest analysis/review/document); streaks use UTC days;
+  untracked patterns (`Brute Force`, `Recursion`) count toward totals but no pattern row; the
+  quality score's weights are judgment calls; no pagination on the problem list; search refetches on
+  every keystroke; recording a review is best-effort (a failed write is logged, not retried).
+- There's still no `GET /api/submissions/:id` for a raw submission — the dashboard's
+  `GET /api/problems/:id` returns a submission's full detail, and review/document/publish look it
+  up internally.
 - **No local document persistence.** `POST /api/submissions/:id/document` returns the generated
   Markdown in the response only; nothing is saved to disk. `POST /api/submissions/:id/publish`
   does commit it to GitHub (Phase 7), but that's the only place it's persisted — see
@@ -857,9 +1009,10 @@ and manual `curl` requests.
   publishes** — a transient failure surfaces immediately as an error rather than being retried,
   and calling any of the three endpoints twice for the same submission redoes the full work (a
   fresh AI call, plus up to three fresh GitHub commits for `/publish`), at full cost, each time.
-- **No extension or web UI triggers a review, a document generation, or a publish yet** — all
+- **No extension or web UI *triggers* a review, a document generation, or a publish yet** — all
   three endpoints exist, are fully tested, and work when called directly (e.g. via `curl`), but
-  nothing in `apps/extension`/`apps/web` calls any of them.
+  nothing in `apps/extension`/`apps/web` calls any of them (the dashboard only *displays* what they
+recorded).
 - **The document generator's escaping targets GitHub-Flavored Markdown, not strict CommonMark**,
   and "Is My Solution Optimal?" only ever answers Yes/No (Phase 5's `optimality.isOptimal` is a
   plain boolean, not a tri-state) — see
@@ -878,8 +1031,7 @@ and manual `curl` requests.
 - **`patterns/` in the published repository is unimplemented** — reserved in the documented
   layout, written by no code, per Phase 7's explicit "do not overbuild" instruction.
 - No authentication or multi-user support — every request is trusted as the extension's own
-  user; there's no concept of a logged-in user yet.
-- The web app's only real feature is a health-check status display; there is no dashboard yet.
+  user; everything belongs to one seeded local user (the schema is ready for accounts).
 - The extension has not been loaded as an unpacked extension into an actual Chrome browser
   window against the live LeetCode site (with the API running) as part of this phase's
   verification (no browser automation was available in this environment) — it has been
@@ -936,6 +1088,13 @@ and manual `curl` requests.
   ones.
 - Add retry-with-backoff for transient GitHub API failures, matching the planned AI-provider
   retry behavior above.
+- Look at the dashboard in a real browser and fix whatever the tests couldn't see (layout,
+  responsiveness, dark mode); add pagination, a debounced search, and trend charts once review
+  history exists.
+- Run the migrations and the app against a real PostgreSQL server (`docker compose up -d`) and a
+  hosted one (TLS via `DATABASE_SSL`), and add a retry/queue for failed dashboard recording.
+- Add "Review", "Generate document", and "Publish" buttons to the dashboard's detail page so the
+  whole workflow can be driven from the UI instead of `curl`.
 - Build out `patterns/` in the published repository once there's a clear design for what a
   per-pattern file should contain — deliberately deferred in Phase 7 ("do not overbuild").
 
@@ -958,6 +1117,8 @@ and manual `curl` requests.
 - [docs/github-integration.md](docs/github-integration.md) — the GitHub publishing layer's API
   usage, authentication and token handling, repository structure, commit process, duplicate
   handling, and future OAuth design.
+- [docs/database.md](docs/database.md) — the PostgreSQL schema, relationships, indexes, why each
+  table exists, migrations, and the analytics rules (quality score, streaks, pattern normalization).
 - [docs/development.md](docs/development.md) — prerequisites, setup, commands, and
   troubleshooting.
 - [docs/phases/phase-01.md](docs/phases/phase-01.md) — the detailed record of Phase 1.
@@ -973,3 +1134,9 @@ and manual `curl` requests.
   (document generation), including a full example generated document.
 - [docs/phases/phase-07.md](docs/phases/phase-07.md) — the detailed record of Phase 7
   (GitHub integration), including the complete publish workflow.
+- [docs/phases/phase-08.md](docs/phases/phase-08.md) — the detailed record of Phase 8
+  (dashboard, analytics, and PostgreSQL), including every file, the API, tests, and verification.
+- [docs/phases/phase-09.md](docs/phases/phase-09.md) — the detailed record of Phase 9
+  (improvement tracking), including every file, the API, tests, and verification.
+- [docs/improvement-engine.md](docs/improvement-engine.md) — the improvement engine: data model,
+  comparison logic, profile and recommendation logic, and limitations.

@@ -5,6 +5,7 @@ import { renderSolutionSection } from './templates/solutionSection.js';
 import { renderComplexitySection } from './templates/complexitySection.js';
 import { renderReviewSection } from './templates/reviewSection.js';
 import { renderLearningSection, renderPersonalReview } from './templates/learningSection.js';
+import { renderHistorySections, renderRecurringMistakes } from './templates/improvementSection.js';
 import type { DocumentGenerationInput, GeneratedDocument } from './types.js';
 
 /**
@@ -17,7 +18,7 @@ import type { DocumentGenerationInput, GeneratedDocument } from './types.js';
  * docs/document-generation.md for the full document schema.
  */
 export function generateDocument(input: DocumentGenerationInput): GeneratedDocument {
-  const { problem, submission, review } = input;
+  const { problem, submission, review, history, recurringMistakes } = input;
 
   // submission.code is guaranteed non-null by the time this is called —
   // buildCombinedReview() (services/combined-review.service.ts) already
@@ -48,6 +49,10 @@ export function generateDocument(input: DocumentGenerationInput): GeneratedDocum
     renderReviewSection(submission, review.ai),
     renderLearningSection(review.deterministic, review.ai),
     renderPersonalReview(review.deterministic, review.ai, review.agreement),
+    ...(history && history.attempts.length >= 2 ? [renderHistorySections(history)] : []),
+    ...(recurringMistakes && recurringMistakes.length > 0
+      ? [renderRecurringMistakes(recurringMistakes)]
+      : []),
     renderFooter(review.submissionId, review.generatedAt),
   ];
 

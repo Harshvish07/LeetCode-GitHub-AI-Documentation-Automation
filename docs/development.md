@@ -5,9 +5,14 @@
 - **Node.js ≥ 20** (this project was developed and verified against Node 24.11.0). Check with
   `node --version`.
 - **npm ≥ 10** (ships with modern Node installs). Check with `npm --version`.
-- No database, Docker, or other services are required — everything runs with plain `node`/`npm`
-  (submissions are stored in-memory by the API process; see
-  [docs/phases/phase-03.md](phases/phase-03.md#limitations)).
+- No database, Docker, or other services are required to run the API or **any test** —
+  everything runs with plain `node`/`npm`. Without `DATABASE_URL`, submissions are stored in memory
+  by the API process (see [docs/phases/phase-03.md](phases/phase-03.md#limitations)) and the
+  dashboard answers `503`. Tests that need a database run real Postgres SQL in-process (PGlite).
+- **To use the dashboard** you need a PostgreSQL database: `DATABASE_URL` (see
+  [docs/database.md](database.md)). Docker is the easiest way to get one locally:
+  `POSTGRES_PASSWORD=choose-one docker compose up -d`, then put
+  `DATABASE_URL=postgres://codereviewai:choose-one@localhost:5432/codereviewai` in `apps/api/.env`.
 - An AI provider API key (`AI_PROVIDER_API_KEY` — Anthropic or Gemini, selected by
   `AI_PROVIDER`) is needed **only** to actually call `POST /api/submissions/:id/review`,
   `POST /api/submissions/:id/document`, or `POST /api/submissions/:id/publish` — every other
@@ -57,6 +62,7 @@ All commands below are run from the **repository root** unless noted otherwise.
 | `npm run lint:fix` | Same, with `--fix`. |
 | `npm run format` | Runs Prettier `--write` across the repo. |
 | `npm run format:check` | Runs Prettier `--check` (fails if anything is unformatted). |
+| `npm run db:migrate -w @codereviewai/api` | Applies pending database migrations (needs `DATABASE_URL`). The API also migrates automatically at startup. |
 
 Per-workspace equivalents exist too, e.g. `npm run test -w @codereviewai/api` or
 `npm run dev -w @codereviewai/web` (or `cd apps/api && npm run test`).
@@ -109,8 +115,14 @@ npm run test:watch -w @codereviewai/api      # one workspace, watch mode
   mode) — **every GitHub-facing test uses a mocked `GitHubClient`
   (`github/mockGitHubClient.ts`) or an injected mock `fetch`; nothing ever calls the real GitHub
   API.**
-- `apps/web` tests use **React Testing Library** with Vitest's `jsdom` environment; `fetch` is
-  stubbed per-test with `vi.stubGlobal` so no real network call happens.
+  The Phase 8 dashboard endpoints and the `persistence/` layer are tested against **real
+  Postgres SQL** via `persistence/pgliteDatabase.ts` (PGlite, in-process — no server, no Docker),
+  and the pure `analytics/` functions need no database at all. Run a single web test file through
+  its workspace (`npm run test -w @codereviewai/web`) rather than pointing Vitest at `apps/web` from
+  the repo root — the jsdom environment is configured in `apps/web/vite.config.ts`.
+- `apps/web` tests use **React Testing Library** (and `@testing-library/user-event` for typing and
+  clicking) with Vitest's `jsdom` environment; `fetch` is stubbed per-test (`testing/fixtures.ts`'s
+  `mockApi`) so no real network call happens.
 - `apps/extension` tests use `jsdom`'s `JSDOM` class directly for DOM-dependent extraction
   logic, and a stubbed `fetch` (like `apps/web`) for `lib/api.test.ts`, which exercises the
   extension's `POST /api/submissions` client without a real network call.
@@ -154,6 +166,10 @@ Produces:
 - `apps/api/dist` — compiled JS (via `tsc -p tsconfig.build.json`, which excludes `*.test.ts`
   files, as well as `src/ai/providers/mockProvider.ts` and `src/github/mockGitHubClient.ts` —
   test/dev-only fakes that must never ship — so none of them end up in the shipped output).
+- `apps/api/dist` also excludes `src/persistence/pgliteDatabase.ts` (the test-only in-process
+  Postgres) and `src/testing/` (test fixtures). Its migrations are TypeScript modules, so they
+  compile into `dist/` with no extra copy step; `npm run db:migrate:built -w @codereviewai/api` runs
+  them from the build.
 - `apps/web/dist` — static production build (`tsc --noEmit` for a final type-check, then
   `vite build`).
 - `apps/extension/dist` — bundled `background.js`, `popup/popup.js`, `content/leetcode.js`,
@@ -161,6 +177,33 @@ Produces:
 
 To run the built API standalone: `npm run start -w @codereviewai/api` (runs
 `node dist/index.js`).
+
+## Working with the database
+
+```bash
+POSTGRES_PASSWORD=choose-one docker compose up -d     # optional local Postgres (port 5432)
+# apps/api/.env:  DATABASE_URL=postgres://codereviewai:choose-one@localhost:5432/codereviewai
+npm run dev                                           # migrates at startup, then serves the dashboard
+```
+
+- **Adding a schema change:** create `apps/api/src/persistence/migrations/002_<name>.ts` exporting a
+  `Migration` (`{ id: '002', name, sql }`), append it to `migrations/index.ts`, and add a test in
+  `persistence/migrate.test.ts`. Never edit a migration that has already been applied.
+- **Populating the dashboard:** the dashboard shows what `POST /api/submissions` stored and what
+  `POST …/review`, `…/document`, and `…/publish` recorded, so submit a solution (from the extension or
+  with `curl`), then request its review, then open `http://localhost:5173`. A submission with no review
+  still appears in the list, marked "Not reviewed".
+- **Populating attempt history (Phase 9):** submit the same problem more than once (a `POST
+  /api/submissions` per attempt, e.g. Wrong Answer, then Time Limit Exceeded, then Accepted) and review
+  each attempt; then `GET /api/problems/<any attempt id>/history`, `/api/learning/profile`, and
+  `/api/learning/recommendations`, or open the problem's detail page and the **Learning** page.
+  Unreviewed attempts still appear, with review-derived fields empty. There is no migration to run.
+  In tests, insert attempts directly with `PostgresSubmissionRepository.create()` and a fixed
+  `receivedAt` (see `routes/improvement.route.test.ts`) — the HTTP endpoint stamps "now", which makes
+  attempt order depend on clock resolution.
+- **Testing against a database:** repository and API tests use `createPgliteDatabase()`, which needs
+  nothing installed. Those files boot an in-process Postgres each, which is why
+  `apps/api/vitest.config.ts` raises the hook timeout.
 
 ## Troubleshooting
 
@@ -173,6 +216,18 @@ To run the built API standalone: `npm run start -w @codereviewai/api` (runs
   expected in local dev without a key; every other endpoint works normally. See
   [docs/ai-analysis.md](ai-analysis.md), [docs/document-generation.md](document-generation.md),
   and [docs/api.md](api.md#post-apisubmissionsidreview).
+- **The dashboard shows "The dashboard needs a database" (`503 DATABASE_NOT_CONFIGURED`)** —
+  `DATABASE_URL` isn't set (or the API wasn't restarted after setting it). See
+  [docs/database.md](database.md).
+- **The API fails to start with a Postgres connection error** — `DATABASE_URL` points somewhere
+  that isn't accepting connections (is `docker compose up -d` running? does the password match
+  `POSTGRES_PASSWORD`?), or the host needs TLS (`DATABASE_SSL=true`).
+- **The dashboard is empty after submitting a solution** — a submission appears in the list right
+  away, but patterns, quality, and the review only appear after `POST /api/submissions/:id/review`
+  has been called for it. Also check the API log for `[persistence] failed to record …`: recording is
+  best-effort, so a failed write is logged rather than failing the request.
+- **Tests time out starting Postgres** — several test files each boot PGlite; on a very slow machine
+  raise `hookTimeout` in `apps/api/vitest.config.ts`.
 - **`POST /api/submissions/:id/publish` returns `502 GITHUB_AUTH_FAILED`** — most likely
   `GITHUB_TOKEN` or `GITHUB_REPO` isn't set (or `GITHUB_REPO` isn't in `"owner/repo"` form) in
   your environment. This is expected in local dev without GitHub configured; every other

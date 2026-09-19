@@ -78,7 +78,7 @@ both the MVP implementation and the seam a future OAuth implementation plugs int
 **What:** `createEnvTokenAuthProvider({ token })` — implements `GitHubAuthProvider` by returning
 a single env-sourced token, or rejecting with `AUTH_FAILED` if unset.
 **Where used:** `github/createGitHubClientFromEnv.ts`.
-**Future dependencies:** a Phase 9+ OAuth implementation would be a new file
+**Future dependencies:** a future OAuth implementation would be a new file
 (`createOAuthProvider()`) implementing the same `GitHubAuthProvider` interface — see
 [docs/github-integration.md#future-oauth-design](../github-integration.md#future-oauth-design).
 

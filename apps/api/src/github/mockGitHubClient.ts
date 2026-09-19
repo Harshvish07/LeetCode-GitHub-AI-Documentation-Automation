@@ -32,7 +32,10 @@ export function createInMemoryGitHubClient(
     writes,
     writeInputs,
     async getRepository() {
-      return { defaultBranch: options.defaultBranch ?? 'main' };
+      return {
+        defaultBranch: options.defaultBranch ?? 'main',
+        htmlUrl: 'https://github.com/mock/mock',
+      };
     },
     async getFile(path: string): Promise<GitHubFile | null> {
       return files.get(path) ?? null;

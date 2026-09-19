@@ -1,4 +1,9 @@
-import type { LeetCodeProblemInfo, LeetCodeSubmissionInfo } from '@codereviewai/shared';
+import type {
+  LearningInsight,
+  LeetCodeProblemInfo,
+  LeetCodeSubmissionInfo,
+  ProblemHistory,
+} from '@codereviewai/shared';
 import type { CombinedSolutionReview } from '../ai/types.js';
 
 /**
@@ -11,6 +16,10 @@ export interface DocumentGenerationInput {
   problem: LeetCodeProblemInfo;
   submission: LeetCodeSubmissionInfo;
   review: CombinedSolutionReview;
+  /** Optional (Phase 9): rendered as "Submission History" and "How My Solution Improved" when it has two or more attempts. */
+  history?: ProblemHistory;
+  /** Optional (Phase 9): rendered as "Recurring Mistakes" when non-empty. */
+  recurringMistakes?: LearningInsight[];
 }
 
 export interface GeneratedDocument {

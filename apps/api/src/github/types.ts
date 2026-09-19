@@ -10,6 +10,8 @@
  */
 export interface GitHubRepositoryInfo {
   defaultBranch: string;
+  /** The repository's browsable URL, e.g. https://github.com/owner/repo — used to build links to published files. */
+  htmlUrl: string;
 }
 
 /** A file's current content and sha, as read from the repository — the sha is required by GitHub's Contents API to update (not create) a file, so its presence here is also how callers know whether to update or create it. */

@@ -43,7 +43,11 @@ describe('createGitHubClient', () => {
 
   describe('getRepository', () => {
     it('returns the default branch on success (repository lookup)', async () => {
-      const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(200, { default_branch: 'main' }));
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(200, { default_branch: 'main', html_url: 'https://github.com/me/journal' }),
+        );
       const client = createGitHubClient({
         owner: 'me',
         repo: 'journal',
@@ -53,7 +57,10 @@ describe('createGitHubClient', () => {
 
       const result = await client.getRepository();
 
-      expect(result).toEqual({ defaultBranch: 'main' });
+      expect(result).toEqual({
+        defaultBranch: 'main',
+        htmlUrl: 'https://github.com/me/journal',
+      });
       expect(fetchSpy).toHaveBeenCalledTimes(1);
       const [url] = fetchSpy.mock.calls[0] as [string];
       expect(url).toContain('/repos/me/journal');

@@ -139,6 +139,17 @@ describe('GitHubPublishService.publish — create mode', () => {
     });
   });
 
+  it('returns a browsable link to the published document (used by the dashboard)', async () => {
+    const client = createInMemoryGitHubClient({}, { defaultBranch: 'trunk' });
+    const service = new GitHubPublishService(client);
+
+    const result = await service.publish(input({ mode: 'create' }));
+
+    expect(result.documentUrl).toBe(
+      'https://github.com/mock/mock/blob/trunk/problems/001-two-sum/README.md',
+    );
+  });
+
   it('uses the exact task-example commit message style for a new problem', async () => {
     const client = createInMemoryGitHubClient();
     const service = new GitHubPublishService(client);

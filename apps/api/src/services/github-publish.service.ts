@@ -27,6 +27,8 @@ export interface PublishInput {
 export interface PublishResult {
   status: 'created' | 'updated' | 'unchanged';
   path: string;
+  /** A browsable link to the published document, e.g. https://github.com/owner/repo/blob/main/problems/001-two-sum/README.md */
+  documentUrl: string;
   commitUrl?: string;
   index: { updated: boolean };
   readme: { updated: boolean };
@@ -57,7 +59,7 @@ export class GitHubPublishService {
   async publish(input: PublishInput): Promise<PublishResult> {
     const mode: PublishMode = input.mode ?? 'create';
 
-    await this.repository.ensureAccessible();
+    const repository = await this.repository.ensureAccessible();
 
     const path = buildProblemRepoPath({
       slug: input.problem.slug,
@@ -80,9 +82,16 @@ export class GitHubPublishService {
     }
 
     const title = input.problem.title ?? input.problem.slug ?? 'this problem';
+    const documentUrl = `${repository.htmlUrl}/blob/${repository.defaultBranch}/${path}`;
 
     if (existing !== null && existing.content === input.document.content) {
-      return { status: 'unchanged', path, index: { updated: false }, readme: { updated: false } };
+      return {
+        status: 'unchanged',
+        path,
+        documentUrl,
+        index: { updated: false },
+        readme: { updated: false },
+      };
     }
 
     const action = existing === null ? 'add-problem' : 'update-problem';
@@ -98,6 +107,7 @@ export class GitHubPublishService {
     return {
       status: existing === null ? 'created' : 'updated',
       path,
+      documentUrl,
       commitUrl: result.commitUrl,
       index: { updated: indexUpdated },
       readme: { updated: readmeUpdated },
